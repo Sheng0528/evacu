@@ -1,0 +1,372 @@
+import numpy as np
+import pandas as pd
+import random
+import importlib.util
+import sys
+import os
+from tabulate import tabulate
+
+# 设置随机种子，确保结果可重现
+np.random.seed(42)
+random.seed(42)
+
+class EvacuationEncoding:
+    def __init__(self, population_size=10, dmax=700):
+        """
+        初始化编码类
+
+        """
+        self.population_size = population_size
+        self.dmax = dmax # Maximum walking distance
+
+        # 加载数据
+        self.load_data()
+
+        # 获取每个需求点的可行集结点
+        self.feasible_assembly_points = self.get_feasible_assembly_points()
+
+    def load_data(self):
+        """Importing datas"""
+        try:
+            # Try to import evacuation_area_division.py
+            module_name = "evacuation_area_division"
+            file_path = f"{module_name}.py"
+
+            if not os.path.exists(file_path):
+                print(f"找不到文件 {file_path}，将使用模拟数据。")
+                self._use_simulated_data()
+                return
+
+            # 动态导入模块
+            spec = importlib.util.spec_from_file_location(module_name, file_path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+            # 从模块中提取参数
+            self._extract_parameters_from_module(module)
+
+            print("成功从evacuation_area_division.py导入参数")
+
+        except Exception as e:
+            print(f"导入evacuation_area_division.py时出错: {e}")
+            print("将使用模拟数据...")
+            self._use_simulated_data()
+
+    def _extract_parameters_from_module(self, module):
+        """Getting parameters"""
+        try:
+            # Demand points
+            self.num_demand_points = len(module.district_centroids)
+
+            # Assemble points
+            self.assembly_points = module.special_nodes
+            self.num_assembly_points = len(self.assembly_points)
+
+            # Demands
+            self.demand_quantities = module.district_demands
+
+            # Assemble point capability
+            self.assembly_capacities = module.p_point_capacities
+
+            # Area information
+            self.demand_districts = list(range(len(module.district_boundaries)))
+
+            # Area which assemble point belongs to
+            self.assembly_districts = {}
+            for node, district_idx, _ in module.p_points:
+                self.assembly_districts[node] = district_idx
+
+            # Routine data
+            if hasattr(module, 'routes_df'):
+                self.routes_df = module.routes_df
+            else:
+                # 如果模块中没有routes_df，尝试读取CSV文件
+                try:
+                    self.routes_df = pd.read_csv('evacuation_routes.csv')
+                except FileNotFoundError:
+                    print("找不到evacuation_routes.csv文件，将从模块中提取路径数据...")
+                    self._extract_routes_from_module(module)
+        except Exception as e:
+            print(f"从模块中提取参数时出错: {e}")
+            raise
+
+    def _extract_routes_from_module(self, module):
+        """从模块中提取路径数据"""
+        try:
+            # 创建一个空的DataFrame来存储路径数据
+            self.routes_df = pd.DataFrame(columns=[
+                "Demand Point", "Assembly Point", "Shortest Distance",
+                "Number of Main Road Crossings", "Shortest Path"
+            ])
+
+            # 从模块中提取路径数据
+            for result in module.results:
+                q_idx = result['q_idx']
+                p_idx = result['p_idx']
+                length = result['length']
+                crossings = result['crossings']
+                path = " -> ".join(map(str, result['path']))
+
+                # 添加到DataFrame
+                self.routes_df = self.routes_df.append({
+                    "Demand Point": f"Q{q_idx + 1}",
+                    "Assembly Point": f"P{p_idx}",
+                    "Shortest Distance": length,
+                    "Number of Main Road Crossings": crossings,
+                    "Shortest Path": path
+                }, ignore_index=True)
+        except Exception as e:
+            print(f"从模块中提取路径数据时出错: {e}")
+            self._create_simulated_routes()
+
+    def _use_simulated_data(self):
+        """使用模拟数据"""
+        # 需求点数量
+        self.num_demand_points = 4
+
+        # 集结点数量
+        self.num_assembly_points = 5
+
+        # 集结点列表
+        self.assembly_points = [1, 5, 8, 16, 18]
+
+        # 需求点的疏散需求量
+        self.demand_quantities = [350, 320, 460, 500]
+
+        # 集结点的容量
+        self.assembly_capacities = {
+            1: 610,
+            5: 550,
+            8: 800,
+            16: 870,
+            18: 900
+        }
+
+        # 每个需求点所属的小区
+        self.demand_districts = [0, 1, 2, 3]  # Q1属于小区0，Q2属于小区1，依此类推
+
+        # 集结点所属的小区
+        self.assembly_districts = {
+            1: 0,  # P1属于小区0
+            5: 0,  # P5属于小区0
+            8: 1,  # P8属于小区1
+            16: 2,  # P16属于小区2
+            18: 3  # P18属于小区3
+        }
+
+        # 创建模拟的路径数据
+        self._create_simulated_routes()
+
+    def _create_simulated_routes(self):
+        """创建模拟的路径数据"""
+        print("创建模拟的路径数据...")
+        # 创建模拟数据
+        data = []
+        for q in range(1, self.num_demand_points + 1):  # 需求点
+            for p in self.assembly_points:  # 集结点
+                # 模拟距离和穿越干路次数
+                distance = random.randint(200, 700)
+                crossings = random.randint(0, 4)
+                path = f"{q - 1} -> ... -> {p}"
+                data.append([f"Q{q}", f"P{p}", distance, crossings, path])
+
+        self.routes_df = pd.DataFrame(data, columns=[
+            "Demand Point", "Assembly Point", "Shortest Distance",
+            "Number of Main Road Crossings", "Shortest Path"
+        ])
+
+        # 创建从需求点到集结点的距离和穿越干路次数的映射
+        self.distances = {}
+        self.crossings = {}
+
+        for _, row in self.routes_df.iterrows():
+            q = int(row["Demand Point"][1:]) - 1  # Q1 -> 0, Q2 -> 1, ...
+            p = int(row["Assembly Point"][1:])  # P1 -> 1, P5 -> 5, ...
+            self.distances[(q, p)] = row["Shortest Distance"]
+            self.crossings[(q, p)] = row["Number of Main Road Crossings"]
+
+    def get_feasible_assembly_points(self):
+        """获取每个需求点的可行集结点列表（满足最大步行距离约束）"""
+        # 首先确保distances字典已被初始化
+        if not hasattr(self, 'distances'):
+            self.distances = {}
+            self.crossings = {}
+
+            for _, row in self.routes_df.iterrows():
+                q = int(row["Demand Point"][1:]) - 1  # Q1 -> 0, Q2 -> 1, ...
+                p = int(row["Assembly Point"][1:])  # P1 -> 1, P5 -> 5, ...
+                self.distances[(q, p)] = row["Shortest Distance"]
+                self.crossings[(q, p)] = row["Number of Main Road Crossings"]
+
+        feasible_points = {}
+
+        for q in range(self.num_demand_points):
+            feasible_points[q] = []
+            for p in self.assembly_points:
+                # 检查步行距离是否小于最大限制
+                if self.distances.get((q, p), float('inf')) <= self.dmax:
+                    feasible_points[q].append(p)
+
+        return feasible_points
+
+    def is_valid_solution(self, chromosome):
+        """检查解是否满足所有约束条件"""
+        # 1. 检查容量约束
+        assembly_loads = {p: 0 for p in self.assembly_points}
+        for q, p in enumerate(chromosome):
+            assembly_loads[p] += self.demand_quantities[q]
+
+        for p, load in assembly_loads.items():
+            if load > self.assembly_capacities[p]:
+                return False
+
+        # 2. 检查同一小区的人是否疏散到相同集结点
+        district_to_assembly = {}
+        for q, p in enumerate(chromosome):
+            district = self.demand_districts[q]
+            if district in district_to_assembly and district_to_assembly[district] != p:
+                return False
+            district_to_assembly[district] = p
+
+        # 3. 检查步行距离约束
+        for q, p in enumerate(chromosome):
+            if self.distances.get((q, p), float('inf')) > self.dmax:
+                return False
+
+        return True
+
+    def initialize_population(self):
+        """初始化种群，生成多个随机可行的初始解"""
+        population = []
+
+        for _ in range(self.population_size):
+            # 尝试生成一个有效的个体
+            valid_chromosome = None
+            attempts = 0
+
+            while valid_chromosome is None and attempts < 100:
+                # 为每个需求点随机选择一个集结点
+                chromosome = np.zeros(self.num_demand_points, dtype=int)
+
+                # 为了满足同一小区人疏散到相同集结点的约束，按小区分配
+                district_to_assembly = {}
+
+                for q in range(self.num_demand_points):
+                    district = self.demand_districts[q]
+
+                    # 如果这个小区已经分配了集结点，则使用相同的
+                    if district in district_to_assembly:
+                        chromosome[q] = district_to_assembly[district]
+                    else:
+                        # 否则，为这个小区随机选择一个集结点
+                        if len(self.feasible_assembly_points[q]) > 0:
+                            selected_p = random.choice(self.feasible_assembly_points[q])
+                            chromosome[q] = selected_p
+                            district_to_assembly[district] = selected_p
+                        else:
+                            # 如果没有可行的集结点，随机选择一个
+                            selected_p = random.choice(self.assembly_points)
+                            chromosome[q] = selected_p
+                            district_to_assembly[district] = selected_p
+
+                # 检查解是否满足所有约束
+                if self.is_valid_solution(chromosome):
+                    valid_chromosome = chromosome
+
+                attempts += 1
+
+            # 如果找到有效解，添加到种群
+            if valid_chromosome is not None:
+                population.append(valid_chromosome)
+            else:
+                print(f"警告：无法为个体 {len(population) + 1} 找到有效解，使用可能不满足全部约束的解")
+                population.append(chromosome)  # 添加最后尝试的染色体
+
+        return population
+
+    def display_chromosome_encoding(self, chromosome, chromosome_id=1):
+        """显示染色体编码和分配表格"""
+        print(f"\n染色体 {chromosome_id} 编码:")
+        print(f"v = {{{', '.join([f'P{p}' for p in chromosome])}}}")
+        print(f"含义：v = {{p1, p2, p3, p4}}，其中pi表示第i个需求点的人需到达的集结点编号")
+
+        # 创建表格数据
+        table_data = []
+        header = ["集结点", "是否选为集结点", "对应服务的需求点"]
+
+        # 统计每个集结点服务的需求点
+        assembly_to_demands = {p: [] for p in self.assembly_points}
+        for q, p in enumerate(chromosome):
+            assembly_to_demands[p].append(f"Q{q + 1}")
+
+        # 填充表格数据
+        for p in self.assembly_points:
+            is_selected = "✓" if p in chromosome else "×"
+            demands = ", ".join(assembly_to_demands[p]) if assembly_to_demands[p] else "-"
+            table_data.append([f"P{p}", is_selected, demands])
+
+        # 显示表格
+        print(tabulate(table_data, headers=header, tablefmt="grid"))
+
+        # 显示约束检查结果
+        is_valid = self.is_valid_solution(chromosome)
+        print(f"该解是否满足所有约束: {'是' if is_valid else '否'}")
+
+        # 显示每个需求点的分配详情
+        print("\n需求点分配详情:")
+        detail_data = []
+        for q, p in enumerate(chromosome):
+            detail_data.append([
+                f"Q{q + 1}",
+                self.demand_quantities[q],
+                self.demand_districts[q] + 1,  # 显示小区编号从1开始
+                f"P{p}",
+                self.distances.get((q, p), "N/A")
+            ])
+
+        detail_headers = ["需求点", "需求量", "所属小区", "分配的集结点", "步行距离"]
+        print(tabulate(detail_data, headers=detail_headers, tablefmt="grid"))
+
+        # 显示集结点负载
+        print("\n集结点负载:")
+        load_data = []
+        assembly_loads = {p: 0 for p in self.assembly_points}
+        for q, p in enumerate(chromosome):
+            assembly_loads[p] += self.demand_quantities[q]
+
+        for p in self.assembly_points:
+            load = assembly_loads[p]
+            capacity = self.assembly_capacities[p]
+            usage_rate = (load / capacity) * 100 if capacity > 0 else 0
+            load_data.append([
+                f"P{p}",
+                load,
+                capacity,
+                f"{usage_rate:.2f}%",
+                "✓" if load <= capacity else "×"
+            ])
+
+        load_headers = ["集结点", "负载", "容量", "使用率", "是否满足容量约束"]
+        print(tabulate(load_data, headers=load_headers, tablefmt="grid"))
+
+    def display_all_chromosomes(self, population):
+        """显示所有染色体的编码"""
+        for i, chromosome in enumerate(population):
+            self.display_chromosome_encoding(chromosome, i + 1)
+            print("\n" + "=" * 80)
+
+
+def main():
+    """主函数"""
+    # 创建编码实例
+    encoder = EvacuationEncoding(population_size=5)
+
+    # 初始化种群
+    population = encoder.initialize_population()
+
+    # 显示每个染色体的编码
+    encoder.display_all_chromosomes(population)
+
+if __name__ == "__main__":
+    main()
