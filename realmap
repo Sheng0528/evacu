@@ -1,0 +1,262 @@
+import osmnx as ox
+import matplotlib.pyplot as plt
+import pandas as pd
+import networkx as nx
+import numpy as np
+
+# 设置图形大小
+plt.rcParams['figure.figsize'] = (15, 15)
+
+# 设置OSMnx参数
+ox.settings.use_cache = True
+ox.settings.log_console = True
+ox.settings.log_level = 20
+
+# 从OSM文件读取并创建图形
+G = ox.graph_from_xml('map.osm', simplify=True)
+
+# 将图形投影到适合绘图的坐标参考系
+G_proj = ox.project_graph(G)
+
+# 创建一个无向图副本用于处理
+G_undirected = G_proj.to_undirected()
+
+# 定义要保留的道路类型（从高到低排序）
+keep_road_types = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary']
+
+# 删除次要道路 - 先基于道路类型过滤
+edges_to_remove = []
+for u, v, k, data in G_undirected.edges(data=True, keys=True):
+    # 检查是否有highway标签，如果有检查是否在keep_road_types中
+    # 如果没有highway标签或不在keep_road_types中，则删除
+    if 'highway' not in data or data['highway'] not in keep_road_types:
+        edges_to_remove.append((u, v, k))
+
+# 删除所有不符合条件的边
+for u, v, k in edges_to_remove:
+    if G_undirected.has_edge(u, v, k):  # 确认边仍然存在
+        G_undirected.remove_edge(u, v, k)
+
+# 删除所有孤立的节点
+isolated_nodes = [node for node in G_undirected.nodes() if G_undirected.degree(node) == 0]
+G_undirected.remove_nodes_from(isolated_nodes)
+
+# 确保我们处理的是最大的连通子图
+connected_components = list(nx.connected_components(G_undirected))
+if connected_components:
+    largest_cc = max(connected_components, key=len)
+    G_main = G_undirected.subgraph(largest_cc).copy()
+else:
+    G_main = G_undirected.copy()
+
+# 在主路网络基础上继续处理 - 删除不构成回路的分支道路
+G_no_deadends = G_main.copy()
+
+# 第一步：迭代删除所有度为1的节点（死胡同末端）
+while True:
+    dead_ends = [node for node, degree in G_no_deadends.degree() if degree == 1]
+
+    if not dead_ends:
+        break
+
+    G_no_deadends.remove_nodes_from(dead_ends)
+
+# 将多重图转换为简单图以使用cycle_basis函数
+G_simple = nx.Graph()
+for u, v in G_no_deadends.edges():
+    G_simple.add_edge(u, v)
+
+# 找出所有环路
+cycles = nx.cycle_basis(G_simple)
+cycle_nodes = set()
+for cycle in cycles:
+    cycle_nodes.update(cycle)
+
+# 创建一个集合来跟踪已处理过的节点
+processed_nodes = set()
+
+# 删除不在任何环路中的度为2的节点
+while True:
+    # 找出当前图中所有度为2的节点
+    degree_2_nodes = [node for node, degree in G_no_deadends.degree() if degree == 2
+                      and node not in processed_nodes]
+
+    if not degree_2_nodes:
+        break
+
+    removed_in_this_iteration = 0
+
+    for node in degree_2_nodes:
+        # 如果节点在某个环路中，保留它
+        if node in cycle_nodes:
+            processed_nodes.add(node)
+            continue
+
+        # 获取该节点的相邻节点
+        neighbors = list(G_no_deadends.neighbors(node))
+        if len(neighbors) == 2:
+            n1, n2 = neighbors
+
+            # 检查这两个相邻节点之间是否已经有连接
+            if not G_no_deadends.has_edge(n1, n2):
+                # 添加相邻节点之间的直接连接
+                G_no_deadends.add_edge(n1, n2)
+
+                # 删除这个中间节点
+                G_no_deadends.remove_node(node)
+                removed_in_this_iteration += 1
+            else:
+                # 节点的两个邻居之间已经有连接，这个节点是冗余的
+                G_no_deadends.remove_node(node)
+                removed_in_this_iteration += 1
+        else:
+            # 如果邻居数量不是2，将节点标记为已处理
+            processed_nodes.add(node)
+
+    # 如果这次迭代没有删除任何节点，则退出循环
+    if removed_in_this_iteration == 0:
+        break
+
+# 确保我们只保留最大的连通子图
+largest_cc = max(nx.connected_components(G_no_deadends), key=len)
+G_filtered = G_no_deadends.subgraph(largest_cc).copy()
+
+
+# 简化道路形状 - 移除冗余的形状点
+def custom_simplify(G):
+    G_simple = G.copy()
+    nodes_to_remove = []
+
+    # 找出所有可以移除的节点（度为2且不在环路中）
+    for node, degree in G_simple.degree():
+        if degree == 2 and node not in cycle_nodes:
+            neighbors = list(G_simple.neighbors(node))
+            if len(neighbors) == 2:
+                n1, n2 = neighbors
+                # 确保节点间距不太远时才简化（避免过度简化）
+                if G_simple.has_node(node) and G_simple.has_node(n1) and G_simple.has_node(n2):
+                    nodes_to_remove.append((node, n1, n2))
+
+    # 移除这些节点并重新连接它们的邻居
+    for node, n1, n2 in nodes_to_remove:
+        if G_simple.has_node(node) and G_simple.has_node(n1) and G_simple.has_node(n2):
+            # 添加新的连接
+            if not G_simple.has_edge(n1, n2):
+                G_simple.add_edge(n1, n2)
+            # 删除冗余节点
+            G_simple.remove_node(node)
+
+    return G_simple
+
+
+# 对网络进行多次简化，持续减少形状点
+G_simplified = G_filtered.copy()
+for _ in range(3):  # 进行多轮简化
+    G_simplified = custom_simplify(G_simplified)
+
+# 将处理后的无向图转换回有向图
+G_result = nx.MultiDiGraph()
+G_result.graph = G_proj.graph.copy()
+
+# 复制节点属性
+for node in G_simplified.nodes():
+    if node in G_proj.nodes():
+        G_result.add_node(node, **G_proj.nodes[node])
+
+# 定义道路层次，用于设置线宽和颜色
+road_hierarchy = {
+    'motorway': 0,  # 高速公路
+    'trunk': 1,  # 国道
+    'primary': 2,  # 主干道
+    'secondary': 3,  # 次干道
+    'tertiary': 4  # 三级道路
+}
+
+# 复制边属性 - 确保边的方向与原始图一致
+for u, v in G_simplified.edges():
+    # 检查原始有向图中的边
+    if G_proj.has_edge(u, v):
+        for k, data in G_proj.get_edge_data(u, v).items():
+            # 复制所有边属性
+            G_result.add_edge(u, v, key=k, **data)
+    # 检查反向边
+    if G_proj.has_edge(v, u):
+        for k, data in G_proj.get_edge_data(v, u).items():
+            # 复制所有边属性
+            G_result.add_edge(v, u, key=k, **data)
+
+# 绘制处理后的地图
+fig, ax = plt.subplots(figsize=(15, 15))
+
+# 节点参数
+node_size = 15
+node_color = '#66ccff'
+
+# 颜色映射 - 从紫色到深灰色的渐变
+cmap = plt.cm.viridis_r  # 使用反转的viridis色谱，紫色为主
+edge_colors = []
+edge_widths = []
+
+# 根据道路等级设置颜色和宽度
+for u, v, k, data in G_result.edges(data=True, keys=True):
+    # 默认设置为最低级别
+    hierarchy_level = 4
+    if 'highway' in data and data['highway'] in road_hierarchy:
+        hierarchy_level = road_hierarchy[data['highway']]
+
+    # 设置颜色 - 高等级道路颜色鲜明，低等级道路颜色暗淡
+    color_val = hierarchy_level / (len(road_hierarchy) - 1)
+    edge_colors.append(cmap(color_val))
+
+    # 设置宽度 - 高等级道路宽，低等级道路窄
+    width = 3.0 - 0.5 * hierarchy_level  # 从2.5递减到1.0
+    edge_widths.append(width)
+
+# 获取图的边界范围以调整显示比例
+if G_result.nodes:
+    nodes = pd.DataFrame({
+        'x': [data['x'] for _, data in G_result.nodes(data=True)],
+        'y': [data['y'] for _, data in G_result.nodes(data=True)]
+    })
+
+    # 计算图的中心点
+    center_x = nodes['x'].mean()
+    center_y = nodes['y'].mean()
+
+    # 计算图的宽度和高度
+    width = nodes['x'].max() - nodes['x'].min()
+    height = nodes['y'].max() - nodes['y'].min()
+
+    # 确定放大系数
+    scale_factor = 0.15  # 减小此值可以放大地图
+
+    # 设置新的边界
+    margin = max(width, height) * scale_factor
+    xlim = [center_x - width / 2 - margin, center_x + width / 2 + margin]
+    ylim = [center_y - height / 2 - margin, center_y + height / 2 + margin]
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+    # 绘制道路网络，使用自定义的边颜色和宽度
+    ox.plot_graph(G_result, ax=ax, node_size=node_size, node_color=node_color,
+                  edge_color=edge_colors, edge_linewidth=edge_widths,
+                  show=False)
+
+    # 创建图例
+    from matplotlib.lines import Line2D
+
+    legend_elements = []
+    for road_type, level in road_hierarchy.items():
+        color_val = level / (len(road_hierarchy) - 1)
+        width = 3.0 - 0.5 * level
+        legend_elements.append(
+            Line2D([0], [0], color=cmap(color_val), lw=width, label=road_type.capitalize())
+        )
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+
+# 去除坐标轴
+plt.axis('off')
+
+# 保存和显示图像
+plt.savefig('simplified_main_road_network.png', dpi=300, bbox_inches='tight')
+plt.show()
