@@ -1,262 +1,334 @@
 import osmnx as ox
-import matplotlib.pyplot as plt
-import pandas as pd
 import networkx as nx
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 import numpy as np
+from shapely.geometry import Point
 
-# 设置图形大小
-plt.rcParams['figure.figsize'] = (15, 15)
 
-# 设置OSMnx参数
-ox.settings.use_cache = True
-ox.settings.log_console = True
-ox.settings.log_level = 20
+class RoadNetworkSelector:
+    def __init__(self, location=None, dist=1000, location_name=""):
+        # Store location name
+        self.location_name = location_name if location_name else "Selected Area"
 
-# 从OSM文件读取并创建图形
-G = ox.graph_from_xml('map.osm', simplify=True)
-
-# 将图形投影到适合绘图的坐标参考系
-G_proj = ox.project_graph(G)
-
-# 创建一个无向图副本用于处理
-G_undirected = G_proj.to_undirected()
-
-# 定义要保留的道路类型（从高到低排序）
-keep_road_types = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary']
-
-# 删除次要道路 - 先基于道路类型过滤
-edges_to_remove = []
-for u, v, k, data in G_undirected.edges(data=True, keys=True):
-    # 检查是否有highway标签，如果有检查是否在keep_road_types中
-    # 如果没有highway标签或不在keep_road_types中，则删除
-    if 'highway' not in data or data['highway'] not in keep_road_types:
-        edges_to_remove.append((u, v, k))
-
-# 删除所有不符合条件的边
-for u, v, k in edges_to_remove:
-    if G_undirected.has_edge(u, v, k):  # 确认边仍然存在
-        G_undirected.remove_edge(u, v, k)
-
-# 删除所有孤立的节点
-isolated_nodes = [node for node in G_undirected.nodes() if G_undirected.degree(node) == 0]
-G_undirected.remove_nodes_from(isolated_nodes)
-
-# 确保我们处理的是最大的连通子图
-connected_components = list(nx.connected_components(G_undirected))
-if connected_components:
-    largest_cc = max(connected_components, key=len)
-    G_main = G_undirected.subgraph(largest_cc).copy()
-else:
-    G_main = G_undirected.copy()
-
-# 在主路网络基础上继续处理 - 删除不构成回路的分支道路
-G_no_deadends = G_main.copy()
-
-# 第一步：迭代删除所有度为1的节点（死胡同末端）
-while True:
-    dead_ends = [node for node, degree in G_no_deadends.degree() if degree == 1]
-
-    if not dead_ends:
-        break
-
-    G_no_deadends.remove_nodes_from(dead_ends)
-
-# 将多重图转换为简单图以使用cycle_basis函数
-G_simple = nx.Graph()
-for u, v in G_no_deadends.edges():
-    G_simple.add_edge(u, v)
-
-# 找出所有环路
-cycles = nx.cycle_basis(G_simple)
-cycle_nodes = set()
-for cycle in cycles:
-    cycle_nodes.update(cycle)
-
-# 创建一个集合来跟踪已处理过的节点
-processed_nodes = set()
-
-# 删除不在任何环路中的度为2的节点
-while True:
-    # 找出当前图中所有度为2的节点
-    degree_2_nodes = [node for node, degree in G_no_deadends.degree() if degree == 2
-                      and node not in processed_nodes]
-
-    if not degree_2_nodes:
-        break
-
-    removed_in_this_iteration = 0
-
-    for node in degree_2_nodes:
-        # 如果节点在某个环路中，保留它
-        if node in cycle_nodes:
-            processed_nodes.add(node)
-            continue
-
-        # 获取该节点的相邻节点
-        neighbors = list(G_no_deadends.neighbors(node))
-        if len(neighbors) == 2:
-            n1, n2 = neighbors
-
-            # 检查这两个相邻节点之间是否已经有连接
-            if not G_no_deadends.has_edge(n1, n2):
-                # 添加相邻节点之间的直接连接
-                G_no_deadends.add_edge(n1, n2)
-
-                # 删除这个中间节点
-                G_no_deadends.remove_node(node)
-                removed_in_this_iteration += 1
-            else:
-                # 节点的两个邻居之间已经有连接，这个节点是冗余的
-                G_no_deadends.remove_node(node)
-                removed_in_this_iteration += 1
+        # Get map data using coordinates (more reliable than place names)
+        if location:
+            self.G = ox.graph_from_point(location, dist=dist, network_type='drive')
         else:
-            # 如果邻居数量不是2，将节点标记为已处理
-            processed_nodes.add(node)
+            # Default to Shanghai center coordinates
+            self.G = ox.graph_from_point((31.2304, 121.4737), dist=2000, network_type='drive')
+            if not location_name:
+                self.location_name = "Shanghai"
 
-    # 如果这次迭代没有删除任何节点，则退出循环
-    if removed_in_this_iteration == 0:
-        break
+        # Project the graph
+        self.G = ox.project_graph(self.G)
 
-# 确保我们只保留最大的连通子图
-largest_cc = max(nx.connected_components(G_no_deadends), key=len)
-G_filtered = G_no_deadends.subgraph(largest_cc).copy()
+        # Get nodes and edges
+        self.nodes, self.edges = ox.graph_to_gdfs(self.G)
 
+        # Save original graph
+        self.original_G = self.G.copy()
 
-# 简化道路形状 - 移除冗余的形状点
-def custom_simplify(G):
-    G_simple = G.copy()
-    nodes_to_remove = []
+        # Create an empty graph to store selected nodes and edges - use MultiDiGraph instead of DiGraph
+        self.selected_G = nx.MultiDiGraph()
+        
+        # Add graph attributes from original graph
+        for key, value in self.original_G.graph.items():
+            self.selected_G.graph[key] = value
 
-    # 找出所有可以移除的节点（度为2且不在环路中）
-    for node, degree in G_simple.degree():
-        if degree == 2 and node not in cycle_nodes:
-            neighbors = list(G_simple.neighbors(node))
-            if len(neighbors) == 2:
-                n1, n2 = neighbors
-                # 确保节点间距不太远时才简化（避免过度简化）
-                if G_simple.has_node(node) and G_simple.has_node(n1) and G_simple.has_node(n2):
-                    nodes_to_remove.append((node, n1, n2))
+        # Store selected node and edge IDs
+        self.selected_nodes = set()
+        self.selected_edges = set()
 
-    # 移除这些节点并重新连接它们的邻居
-    for node, n1, n2 in nodes_to_remove:
-        if G_simple.has_node(node) and G_simple.has_node(n1) and G_simple.has_node(n2):
-            # 添加新的连接
-            if not G_simple.has_edge(n1, n2):
-                G_simple.add_edge(n1, n2)
-            # 删除冗余节点
-            G_simple.remove_node(node)
+        # Interaction state
+        self.mode = 'nodes'  # 'nodes' or 'edges'
+        self.selecting = False
+        self.temp_edge = []  # Temporarily store nodes for edge selection
 
-    return G_simple
+        # Create plot window
+        self.fig, self.ax = plt.subplots(figsize=(12, 10))
+        plt.subplots_adjust(bottom=0.2, top=0.9)  # Make space for buttons and title
 
+        # Add buttons
+        self.add_buttons()
 
-# 对网络进行多次简化，持续减少形状点
-G_simplified = G_filtered.copy()
-for _ in range(3):  # 进行多轮简化
-    G_simplified = custom_simplify(G_simplified)
+        # Initial map draw
+        self.draw_map()
+        self.connect_events()
 
-# 将处理后的无向图转换回有向图
-G_result = nx.MultiDiGraph()
-G_result.graph = G_proj.graph.copy()
+        plt.tight_layout()
+        plt.show()
 
-# 复制节点属性
-for node in G_simplified.nodes():
-    if node in G_proj.nodes():
-        G_result.add_node(node, **G_proj.nodes[node])
+    def add_buttons(self):
+        # Add toggle mode button
+        ax_toggle = plt.axes([0.15, 0.05, 0.2, 0.075])
+        self.btn_toggle = Button(ax_toggle, 'Switch to Road Selection')
+        self.btn_toggle.on_clicked(self.toggle_mode)
 
-# 定义道路层次，用于设置线宽和颜色
-road_hierarchy = {
-    'motorway': 0,  # 高速公路
-    'trunk': 1,  # 国道
-    'primary': 2,  # 主干道
-    'secondary': 3,  # 次干道
-    'tertiary': 4  # 三级道路
-}
+        # Add done button
+        ax_done = plt.axes([0.4, 0.05, 0.2, 0.075])
+        self.btn_done = Button(ax_done, 'Complete Selection')
+        self.btn_done.on_clicked(self.finalize_selection)
 
-# 复制边属性 - 确保边的方向与原始图一致
-for u, v in G_simplified.edges():
-    # 检查原始有向图中的边
-    if G_proj.has_edge(u, v):
-        for k, data in G_proj.get_edge_data(u, v).items():
-            # 复制所有边属性
-            G_result.add_edge(u, v, key=k, **data)
-    # 检查反向边
-    if G_proj.has_edge(v, u):
-        for k, data in G_proj.get_edge_data(v, u).items():
-            # 复制所有边属性
-            G_result.add_edge(v, u, key=k, **data)
+        # Add reset button
+        ax_reset = plt.axes([0.65, 0.05, 0.2, 0.075])
+        self.btn_reset = Button(ax_reset, 'Reset')
+        self.btn_reset.on_clicked(self.reset_selection)
 
-# 绘制处理后的地图
-fig, ax = plt.subplots(figsize=(15, 15))
+    def draw_map(self):
+        self.ax.clear()
 
-# 节点参数
-node_size = 15
-node_color = '#66ccff'
+        # Draw original map edges
+        edges = self.edges.copy()
+        edge_colors = ['grey'] * len(edges)
+        edge_widths = [1] * len(edges)
 
-# 颜色映射 - 从紫色到深灰色的渐变
-cmap = plt.cm.viridis_r  # 使用反转的viridis色谱，紫色为主
-edge_colors = []
-edge_widths = []
+        # Highlight selected edges
+        for i, (u, v, k) in enumerate(edges.index):
+            if (u, v, k) in self.selected_edges:
+                edge_colors[i] = 'blue'
+                edge_widths[i] = 3
 
-# 根据道路等级设置颜色和宽度
-for u, v, k, data in G_result.edges(data=True, keys=True):
-    # 默认设置为最低级别
-    hierarchy_level = 4
-    if 'highway' in data and data['highway'] in road_hierarchy:
-        hierarchy_level = road_hierarchy[data['highway']]
+        # Draw edges
+        edges.plot(ax=self.ax, color=edge_colors, linewidth=edge_widths, alpha=0.7)
 
-    # 设置颜色 - 高等级道路颜色鲜明，低等级道路颜色暗淡
-    color_val = hierarchy_level / (len(road_hierarchy) - 1)
-    edge_colors.append(cmap(color_val))
+        # Draw original nodes
+        node_colors = ['lightgrey'] * len(self.nodes)
+        node_sizes = [30] * len(self.nodes)
 
-    # 设置宽度 - 高等级道路宽，低等级道路窄
-    width = 3.0 - 0.5 * hierarchy_level  # 从2.5递减到1.0
-    edge_widths.append(width)
+        # Highlight selected nodes
+        for i, node_id in enumerate(self.nodes.index):
+            if node_id in self.selected_nodes:
+                node_colors[i] = 'red'
+                node_sizes[i] = 100
 
-# 获取图的边界范围以调整显示比例
-if G_result.nodes:
-    nodes = pd.DataFrame({
-        'x': [data['x'] for _, data in G_result.nodes(data=True)],
-        'y': [data['y'] for _, data in G_result.nodes(data=True)]
-    })
+        # Draw nodes
+        self.nodes.plot(ax=self.ax, color=node_colors, markersize=node_sizes, alpha=0.8)
 
-    # 计算图的中心点
-    center_x = nodes['x'].mean()
-    center_y = nodes['y'].mean()
+        # Set location name as the main title
+        plt.suptitle(self.location_name, fontsize=16, y=0.98)
 
-    # 计算图的宽度和高度
-    width = nodes['x'].max() - nodes['x'].min()
-    height = nodes['y'].max() - nodes['y'].min()
+        if self.mode == 'nodes':
+            subtitle = 'Selection Mode: Nodes - Click on intersections'
+            self.btn_toggle.label.set_text('Switch to Road Selection')
+        else:
+            subtitle = 'Selection Mode: Roads - Click two nodes to select shortest path between them'
+            self.btn_toggle.label.set_text('Switch to Node Selection')
 
-    # 确定放大系数
-    scale_factor = 0.15  # 减小此值可以放大地图
+        plt.title(subtitle, fontsize=12)
 
-    # 设置新的边界
-    margin = max(width, height) * scale_factor
-    xlim = [center_x - width / 2 - margin, center_x + width / 2 + margin]
-    ylim = [center_y - height / 2 - margin, center_y + height / 2 + margin]
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
+        self.ax.set_xlabel('Longitude')
+        self.ax.set_ylabel('Latitude')
+        self.fig.canvas.draw_idle()
 
-    # 绘制道路网络，使用自定义的边颜色和宽度
-    ox.plot_graph(G_result, ax=ax, node_size=node_size, node_color=node_color,
-                  edge_color=edge_colors, edge_linewidth=edge_widths,
-                  show=False)
+    def connect_events(self):
+        self.cid_click = self.fig.canvas.mpl_connect('button_press_event', self.on_click)
 
-    # 创建图例
-    from matplotlib.lines import Line2D
+    def toggle_mode(self, event):
+        if self.mode == 'nodes':
+            self.mode = 'edges'
+            self.btn_toggle.label.set_text('Switch to Node Selection')
+        else:
+            self.mode = 'nodes'
+            self.btn_toggle.label.set_text('Switch to Road Selection')
+        self.temp_edge = []  # Reset temporary edge
+        self.draw_map()
 
-    legend_elements = []
-    for road_type, level in road_hierarchy.items():
-        color_val = level / (len(road_hierarchy) - 1)
-        width = 3.0 - 0.5 * level
-        legend_elements.append(
-            Line2D([0], [0], color=cmap(color_val), lw=width, label=road_type.capitalize())
-        )
-    ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+    def on_click(self, event):
+        if event.inaxes != self.ax:
+            return
 
-# 去除坐标轴
-plt.axis('off')
+        if self.mode == 'nodes':
+            self.select_node(event)
+        else:
+            self.select_edge(event)
 
-# 保存和显示图像
-plt.savefig('simplified_main_road_network.png', dpi=300, bbox_inches='tight')
-plt.show()
+    def select_node(self, event):
+        # Get click position
+        x, y = event.xdata, event.ydata
+        click_point = Point(x, y)
+
+        # Find nearest node
+        min_dist = float('inf')
+        nearest_node = None
+
+        for node_id, node_data in self.nodes.iterrows():
+            node_geom = node_data.geometry
+            dist = node_geom.distance(click_point)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_node = node_id
+
+        # If node found and close enough (30 units is an empirical value, adjust as needed)
+        if nearest_node is not None and min_dist < 100:
+            if nearest_node in self.selected_nodes:
+                # Remove the node
+                self.selected_nodes.remove(nearest_node)
+                
+                # Remove any edges connected to this node
+                edges_to_remove = []
+                for u, v, k in self.selected_edges:
+                    if u == nearest_node or v == nearest_node:
+                        edges_to_remove.append((u, v, k))
+                
+                for edge in edges_to_remove:
+                    self.selected_edges.remove(edge)
+                
+                print(f"取消选择节点: {nearest_node}，同时移除了{len(edges_to_remove)}条相连的边")
+            else:
+                self.selected_nodes.add(nearest_node)
+                print(f"选择节点: {nearest_node}")
+
+            # Redraw the map
+            self.draw_map()
+
+    def find_shortest_path(self, start_node, end_node):
+        """Find the shortest path between two nodes based on number of nodes traversed"""
+        try:
+            # Try to find path in original graph
+            path = nx.shortest_path(self.original_G, start_node, end_node, weight='length')
+            return path
+        except nx.NetworkXNoPath:
+            print(f"节点 {start_node} 与 {end_node} 之间没有找到路径")
+            return None
+
+    def select_edge(self, event):
+        # Get click position
+        x, y = event.xdata, event.ydata
+        click_point = Point(x, y)
+
+        # Find nearest node
+        min_dist = float('inf')
+        nearest_node = None
+
+        for node_id, node_data in self.nodes.iterrows():
+            node_geom = node_data.geometry
+            dist = node_geom.distance(click_point)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_node = node_id
+
+        # If node found and close enough
+        if nearest_node is not None and min_dist < 100:
+            self.temp_edge.append(nearest_node)
+            print(f"选择节点: {nearest_node}")
+
+            # If two nodes selected, find and add shortest path between them
+            if len(self.temp_edge) == 2:
+                start_node, end_node = self.temp_edge
+                
+                # Find shortest path
+                path = self.find_shortest_path(start_node, end_node)
+                
+                if path:
+                    # Add all nodes in the path
+                    for node in path:
+                        self.selected_nodes.add(node)
+                    
+                    # Add all edges along the path
+                    for i in range(len(path) - 1):
+                        u, v = path[i], path[i + 1]
+                        if self.original_G.has_edge(u, v):
+                            # There might be multiple edges between the same nodes
+                            # Get all edges between u and v
+                            for k in self.original_G.get_edge_data(u, v).keys():
+                                self.selected_edges.add((u, v, k))
+                                print(f"添加边: ({u}, {v}, {k})")
+                    
+                    print(f"已添加从 {start_node} 到 {end_node} 的最短路径，共包含 {len(path)} 个节点")
+                
+                # Reset temporary edge
+                self.temp_edge = []
+
+            # Redraw the map
+            self.draw_map()
+
+    def finalize_selection(self, event):
+        # Check if there are any nodes or edges selected
+        if len(self.selected_nodes) == 0:
+            print("没有选择任何节点")
+            return
+            
+        # Ensure edges only connect selected nodes
+        valid_edges = set()
+        for u, v, k in self.selected_edges:
+            if u in self.selected_nodes and v in self.selected_nodes:
+                valid_edges.add((u, v, k))
+            else:
+                print(f"忽略边 ({u}, {v}, {k}) 因为它连接了未选中的节点")
+        
+        # Update selected edges
+        self.selected_edges = valid_edges
+        
+        if len(self.selected_edges) == 0:
+            print("没有选择任何有效边")
+            return
+            
+        # Create selected subgraph - use MultiDiGraph instead of DiGraph
+        self.selected_G = nx.MultiDiGraph()
+        
+        # Copy graph attributes from original graph
+        for key, value in self.original_G.graph.items():
+            self.selected_G.graph[key] = value
+
+        # Add selected nodes
+        for node_id in self.selected_nodes:
+            if node_id in self.original_G.nodes:
+                node_data = self.original_G.nodes[node_id]
+                self.selected_G.add_node(node_id, **node_data)
+
+        # Add selected edges
+        for u, v, k in self.selected_edges:
+            if self.original_G.has_edge(u, v, key=k):
+                edge_data = self.original_G.get_edge_data(u, v, key=k)
+                self.selected_G.add_edge(u, v, key=k, **edge_data)
+
+        # Create new window to display selected network
+        self.display_selected_network()
+
+    def display_selected_network(self):
+        try:
+            # Create new window
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Get selected graph nodes and edges
+            try:
+                nodes, edges = ox.graph_to_gdfs(self.selected_G)
+                
+                if len(edges) > 0 and len(nodes) > 0:
+                    # Draw edges
+                    edges.plot(ax=ax, color='blue', linewidth=2)
+
+                    # Draw nodes
+                    nodes.plot(ax=ax, color='red', markersize=50)
+
+                    ax.set_title(f'Selected Road Network - {self.location_name}')
+                    plt.tight_layout()
+                    plt.show()
+                else:
+                    print("所选图中没有节点或边")
+            except ValueError as e:
+                print(f"获取节点和边时出现错误，可能是图为空: {e}")
+                # Try to debug the graph structure
+                print(f"图中节点数: {len(self.selected_G.nodes)}")
+                print(f"图中边数: {self.selected_G.number_of_edges()}")
+                
+        except Exception as e:
+            print(f"显示所选网络时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def reset_selection(self, event):
+        self.selected_nodes = set()
+        self.selected_edges = set()
+        self.temp_edge = []
+        self.draw_map()
+        print("已重置所有选择")
+
+if __name__ == "__main__":
+    # Nishinomiya, Hyogo, Japan
+    selector = RoadNetworkSelector(
+        location=(34.7378, 135.3423),
+        dist=1000,
+        location_name="Nishinomiya, Hyogo"
+    )
