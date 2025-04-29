@@ -3,7 +3,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 import numpy as np
-from shapely.geometry import Point
+from shapely.geometry import Point, LineString
+from collections import defaultdict
 
 class RoadNetworkSelector:
     def __init__(self, location=None, dist=1000, location_name=""):
@@ -223,7 +224,7 @@ class RoadNetworkSelector:
             self.draw_map()
 
     def find_shortest_path(self, start_node, end_node):
-        """Find the shortest path between two nodes based on number of nodes traversed"""
+        """Find the shortest path between two nodes based on edge length"""
         try:
             # Try to find path in original graph
             path = nx.shortest_path(self.original_G, start_node, end_node, weight='length')
@@ -274,27 +275,155 @@ class RoadNetworkSelector:
             # Create new window
             fig, ax = plt.subplots(figsize=(10, 8))
 
-            # 获取所有边
+            # 获取所有边和节点
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
-
+            
             if len(edges) > 0:
-                # 只画边
+                # 步骤1: 首先画原始边
                 edges.plot(ax=ax, color='blue', linewidth=2)
-
-                # 在每条边旁边显示权值
-                for _, edge in edges.iterrows():
-                    # 获取边的起点和终点坐标
-                    if 'geometry' in edge and edge['geometry']:
+                
+                # 步骤2: 识别需要合并的路径
+                # 创建一个图来表示最终路径的拓扑结构
+                path_graph = nx.Graph()
+                
+                # 添加所有节点
+                for node_id in self.selected_G.nodes():
+                    # 只添加用户明确选择的节点和度不为2的节点
+                    if node_id in self.selected_nodes or self.selected_G.degree(node_id) != 2:
+                        path_graph.add_node(node_id)
+                
+                # 找出所有需要合并的路径
+                paths = []
+                visited_edges = set()
+                
+                # 处理所有边
+                for u, v, k in list(self.selected_G.edges(keys=True)):
+                    if (u, v, k) in visited_edges or (v, u, k) in visited_edges:
+                        continue
+                    
+                    # 设置起点和当前路径
+                    start_node = u
+                    current_node = v
+                    current_path = [u, v]
+                    path_edges = [(u, v, k)]
+                    visited_edges.add((u, v, k))
+                    
+                    # 如果终点是一个关键节点(度不为2或用户选择的节点)，结束路径
+                    while (current_node not in self.selected_nodes and 
+                           self.selected_G.degree(current_node) == 2):
+                        # 找到当前节点的下一个邻居(不是我们来时的节点)
+                        next_nodes = list(self.selected_G.neighbors(current_node))
+                        next_node = next_nodes[0] if next_nodes[0] != current_path[-2] else next_nodes[1]
+                        
+                        # 获取这条边的键
+                        next_edge_keys = list(self.selected_G.get_edge_data(current_node, next_node).keys())
+                        if not next_edge_keys:  # 如果没有边，尝试反向边
+                            next_edge_keys = list(self.selected_G.get_edge_data(next_node, current_node).keys())
+                            if not next_edge_keys:
+                                break  # 没有边，结束路径
+                        
+                        # 添加到路径
+                        current_path.append(next_node)
+                        path_edges.append((current_node, next_node, next_edge_keys[0]))
+                        visited_edges.add((current_node, next_node, next_edge_keys[0]))
+                        
+                        # 更新当前节点
+                        current_node = next_node
+                        
+                        # 如果下一个节点是关键节点或起点，结束路径
+                        if (next_node in self.selected_nodes or 
+                            self.selected_G.degree(next_node) != 2 or
+                            next_node == start_node):
+                            break
+                    
+                    # 存储找到的路径
+                    if len(current_path) > 2:
+                        paths.append((current_path, path_edges))
+                    elif len(current_path) == 2:
+                        # 直接连接两个关键节点的单边
+                        path_graph.add_edge(current_path[0], current_path[1])
+                
+                # 步骤3: 计算每条合并路径的总权值并显示
+                for path_nodes, path_edges in paths:
+                    # 计算总长度
+                    total_length = 0
+                    for u, v, k in path_edges:
+                        edge_data = self.selected_G.get_edge_data(u, v, key=k)
+                        length = edge_data.get('length', 0)
+                        total_length += length
+                    
+                    # 添加到路径图
+                    path_graph.add_edge(path_nodes[0], path_nodes[-1])
+                    
+                    # 计算路径的中心点用于显示标签
+                    mid_node_idx = len(path_nodes) // 2
+                    if len(path_nodes) % 2 == 0:  # 偶数个节点
+                        n1_idx = mid_node_idx - 1
+                        n2_idx = mid_node_idx
+                        n1_coords = (nodes.loc[path_nodes[n1_idx]].geometry.x, nodes.loc[path_nodes[n1_idx]].geometry.y)
+                        n2_coords = (nodes.loc[path_nodes[n2_idx]].geometry.x, nodes.loc[path_nodes[n2_idx]].geometry.y)
+                        mid_x = (n1_coords[0] + n2_coords[0]) / 2
+                        mid_y = (n1_coords[1] + n2_coords[1]) / 2
+                    else:  # 奇数个节点
+                        mid_node = path_nodes[mid_node_idx]
+                        mid_x = nodes.loc[mid_node].geometry.x
+                        mid_y = nodes.loc[mid_node].geometry.y
+                    
+                    # 在路径中心显示总长度
+                    ax.text(mid_x, mid_y, f"{total_length:.1f}m", 
+                            fontsize=9, color='green', backgroundcolor='white',
+                            ha='center', va='center', weight='bold')
+                
+                # 步骤4: 处理单边（直接连接两个关键节点的边）
+                for u, v in path_graph.edges():
+                    if not path_graph.has_edge(u, v):
+                        continue
+                        
+                    # 检查是否有直接边
+                    edge_lengths = []
+                    if self.selected_G.has_edge(u, v):
+                        for k in self.selected_G.get_edge_data(u, v).keys():
+                            edge_data = self.selected_G.get_edge_data(u, v, k)
+                            length = edge_data.get('length', 0)
+                            edge_lengths.append(length)
+                    
+                    if self.selected_G.has_edge(v, u):
+                        for k in self.selected_G.get_edge_data(v, u).keys():
+                            edge_data = self.selected_G.get_edge_data(v, u, k)
+                            length = edge_data.get('length', 0)
+                            edge_lengths.append(length)
+                    
+                    if edge_lengths:
+                        total_length = sum(edge_lengths)
+                        
                         # 计算边的中点
-                        line_geometry = edge['geometry']
-                        midpoint = line_geometry.interpolate(0.5, normalized=True)
+                        u_coords = (nodes.loc[u].geometry.x, nodes.loc[u].geometry.y)
+                        v_coords = (nodes.loc[v].geometry.x, nodes.loc[v].geometry.y)
+                        mid_x = (u_coords[0] + v_coords[0]) / 2
+                        mid_y = (u_coords[1] + v_coords[1]) / 2
+                        
+                        # 在中点显示总长度
+                        ax.text(mid_x, mid_y, f"{total_length:.1f}m", 
+                                fontsize=9, color='green', backgroundcolor='white',
+                                ha='center', va='center', weight='bold')
+            
+            # 只画self.selected_nodes中的节点
+            if len(self.selected_nodes) > 0:
+                # 获取self.selected_nodes对应的gdf（用原nodes表过滤）
+                plot_nodes = self.nodes.loc[list(self.selected_nodes)]
+                plot_nodes.plot(ax=ax, color='red', markersize=50)
 
-                        if midpoint:
-                            # 获取边的长度（权值）
-                            length = edge.get('length', None)
-                            if length is not None:
-                                # 在地图上标注长度，单位为米
-                                ax.text(midpoint.x, midpoint.y, f"{length:.1f}m", fontsize=8, color='green')
+            ax.set_title(f'Selected Road Network - {self.location_name}')
+            plt.tight_layout()
+            plt.show()
+        except ValueError as e:
+            print(f"获取节点和边时出现错误，可能是图为空: {e}")
+            print(f"图中节点数: {len(self.selected_G.nodes)}")
+            print(f"图中边数: {self.selected_G.number_of_edges()}")
+        except Exception as e:
+            print(f"显示所选网络时出错: {e}")
+            import traceback
+            traceback.print_exc()
 
             # 只画self.selected_nodes中的节点
             if len(self.selected_nodes) > 0:
