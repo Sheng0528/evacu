@@ -6,6 +6,7 @@ import numpy as np
 from shapely.geometry import Point, LineString
 from collections import defaultdict
 
+
 class RoadNetworkSelector:
     def __init__(self, location=None, dist=1000, location_name=""):
         # Store location name
@@ -94,9 +95,9 @@ class RoadNetworkSelector:
             if (u, v, k) in self.selected_edges:
                 if (u, v, k) in self.arterial_edges:
                     edge_colors[i] = 'black'  # Arterial roads are black
-                    edge_widths[i] = 4        # And thicker
+                    edge_widths[i] = 4  # And thicker
                 else:
-                    edge_colors[i] = 'blue'   # Regular selected roads are blue
+                    edge_colors[i] = 'blue'  # Regular selected roads are blue
                     edge_widths[i] = 3
 
         # Draw edges
@@ -270,7 +271,7 @@ class RoadNetworkSelector:
         # If edge found and close enough (30 units is an empirical value, adjust as needed)
         if nearest_edge is not None and min_dist < 30:
             u, v, k = nearest_edge
-            
+
             # Check if this edge is already selected
             if (u, v, k) in self.selected_edges:
                 # Toggle arterial road status
@@ -284,11 +285,11 @@ class RoadNetworkSelector:
                 # Add edge to selected edges first, then mark as arterial
                 self.selected_edges.add((u, v, k))
                 self.arterial_edges.add((u, v, k))
-                
+
                 # Also add the nodes to selected nodes
                 self.selected_nodes.add(u)
                 self.selected_nodes.add(v)
-                
+
                 print(f"添加并标记为主干道: ({u}, {v}, {k})")
 
             # Redraw the map
@@ -350,13 +351,13 @@ class RoadNetworkSelector:
 
             # 获取所有边和节点
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
-            
+
             if len(edges) > 0:
                 # 步骤1: 首先画原始边，区分普通道路和干路
                 # Create a copy of the edges dataframe
                 edge_colors = []
                 edge_widths = []
-                
+
                 # Set color and width based on arterial attribute
                 for _, edge_data in edges.iterrows():
                     if edge_data.get('arterial', False):
@@ -365,71 +366,71 @@ class RoadNetworkSelector:
                     else:
                         edge_colors.append('blue')
                         edge_widths.append(2)
-                
+
                 # Plot edges with their respective colors and widths
                 edges.plot(ax=ax, color=edge_colors, linewidth=edge_widths)
-                
+
                 # 步骤2: 识别需要合并的路径
                 # 创建一个图来表示最终路径的拓扑结构
                 path_graph = nx.Graph()
-                
+
                 # 添加所有节点
                 for node_id in self.selected_G.nodes():
                     # 只添加用户明确选择的节点和度不为2的节点
                     if node_id in self.selected_nodes or self.selected_G.degree(node_id) != 2:
                         path_graph.add_node(node_id)
-                
+
                 # 找出所有需要合并的路径
                 paths = []
                 visited_edges = set()
-                
+
                 # 处理所有边
                 for u, v, k in list(self.selected_G.edges(keys=True)):
                     if (u, v, k) in visited_edges or (v, u, k) in visited_edges:
                         continue
-                    
+
                     # 设置起点和当前路径
                     start_node = u
                     current_node = v
                     current_path = [u, v]
                     path_edges = [(u, v, k)]
                     visited_edges.add((u, v, k))
-                    
+
                     # 如果终点是一个关键节点(度不为2或用户选择的节点)，结束路径
-                    while (current_node not in self.selected_nodes and 
+                    while (current_node not in self.selected_nodes and
                            self.selected_G.degree(current_node) == 2):
                         # 找到当前节点的下一个邻居(不是我们来时的节点)
                         next_nodes = list(self.selected_G.neighbors(current_node))
                         next_node = next_nodes[0] if next_nodes[0] != current_path[-2] else next_nodes[1]
-                        
+
                         # 获取这条边的键
                         next_edge_keys = list(self.selected_G.get_edge_data(current_node, next_node).keys())
                         if not next_edge_keys:  # 如果没有边，尝试反向边
                             next_edge_keys = list(self.selected_G.get_edge_data(next_node, current_node).keys())
                             if not next_edge_keys:
                                 break  # 没有边，结束路径
-                        
+
                         # 添加到路径
                         current_path.append(next_node)
                         path_edges.append((current_node, next_node, next_edge_keys[0]))
                         visited_edges.add((current_node, next_node, next_edge_keys[0]))
-                        
+
                         # 更新当前节点
                         current_node = next_node
-                        
+
                         # 如果下一个节点是关键节点或起点，结束路径
-                        if (next_node in self.selected_nodes or 
-                            self.selected_G.degree(next_node) != 2 or
-                            next_node == start_node):
+                        if (next_node in self.selected_nodes or
+                                self.selected_G.degree(next_node) != 2 or
+                                next_node == start_node):
                             break
-                    
+
                     # 存储找到的路径
                     if len(current_path) > 2:
                         paths.append((current_path, path_edges))
                     elif len(current_path) == 2:
                         # 直接连接两个关键节点的单边
                         path_graph.add_edge(current_path[0], current_path[1])
-                
+
                 # 步骤3: 计算每条合并路径的总权值并显示
                 for path_nodes, path_edges in paths:
                     # 计算总长度
@@ -438,10 +439,10 @@ class RoadNetworkSelector:
                         edge_data = self.selected_G.get_edge_data(u, v, key=k)
                         length = edge_data.get('length', 0)
                         total_length += length
-                    
+
                     # 添加到路径图
                     path_graph.add_edge(path_nodes[0], path_nodes[-1])
-                    
+
                     # 计算路径的中心点用于显示标签
                     mid_node_idx = len(path_nodes) // 2
                     if len(path_nodes) % 2 == 0:  # 偶数个节点
@@ -455,17 +456,17 @@ class RoadNetworkSelector:
                         mid_node = path_nodes[mid_node_idx]
                         mid_x = nodes.loc[mid_node].geometry.x
                         mid_y = nodes.loc[mid_node].geometry.y
-                    
+
                     # 在路径中心显示总长度
-                    ax.text(mid_x, mid_y, f"{total_length:.1f}m", 
+                    ax.text(mid_x, mid_y, f"{total_length:.1f}m",
                             fontsize=9, color='green', backgroundcolor='white',
                             ha='center', va='center', weight='bold')
-                
+
                 # 步骤4: 处理单边（直接连接两个关键节点的边）
                 for u, v in path_graph.edges():
                     if not path_graph.has_edge(u, v):
                         continue
-                        
+
                     # 检查是否有直接边
                     edge_lengths = []
                     if self.selected_G.has_edge(u, v):
@@ -473,27 +474,27 @@ class RoadNetworkSelector:
                             edge_data = self.selected_G.get_edge_data(u, v, k)
                             length = edge_data.get('length', 0)
                             edge_lengths.append(length)
-                    
+
                     if self.selected_G.has_edge(v, u):
                         for k in self.selected_G.get_edge_data(v, u).keys():
                             edge_data = self.selected_G.get_edge_data(v, u, k)
                             length = edge_data.get('length', 0)
                             edge_lengths.append(length)
-                    
+
                     if edge_lengths:
                         total_length = sum(edge_lengths)
-                        
+
                         # 计算边的中点
                         u_coords = (nodes.loc[u].geometry.x, nodes.loc[u].geometry.y)
                         v_coords = (nodes.loc[v].geometry.x, nodes.loc[v].geometry.y)
                         mid_x = (u_coords[0] + v_coords[0]) / 2
                         mid_y = (u_coords[1] + v_coords[1]) / 2
-                        
+
                         # 在中点显示总长度
-                        ax.text(mid_x, mid_y, f"{total_length:.1f}m", 
+                        ax.text(mid_x, mid_y, f"{total_length:.1f}m",
                                 fontsize=9, color='green', backgroundcolor='white',
                                 ha='center', va='center', weight='bold')
-            
+
             # 只画self.selected_nodes中的节点
             if len(self.selected_nodes) > 0:
                 # 获取self.selected_nodes对应的gdf（用原nodes表过滤）
@@ -527,6 +528,7 @@ class RoadNetworkSelector:
         self.temp_edge = []
         self.draw_map()
         print("已重置所有选择")
+
 
 if __name__ == "__main__":
     # Nishinomiya, Hyogo, Japan
