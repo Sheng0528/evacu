@@ -3,119 +3,89 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 import numpy as np
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, Polygon, MultiPolygon
+from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
+import itertools
 
 class RoadNetworkSelector:
     def __init__(self, location=None, dist=1000, location_name=""):
-        # Store location name
         self.location_name = location_name if location_name else "Selected Area"
 
-        # Get map data using coordinates (more reliable than place names)
         if location:
             self.G = ox.graph_from_point(location, dist=dist, network_type='drive')
         else:
-            # Default to Shanghai center coordinates
             self.G = ox.graph_from_point((31.2304, 121.4737), dist=2000, network_type='drive')
             if not location_name:
                 self.location_name = "Shanghai"
 
-        # Project the graph
         self.G = ox.project_graph(self.G)
-
-        # Get nodes and edges
         self.nodes, self.edges = ox.graph_to_gdfs(self.G)
-
-        # Save original graph
         self.original_G = self.G.copy()
 
-        # Create an empty graph to store selected nodes and edges - use MultiDiGraph instead of DiGraph
         self.selected_G = nx.MultiDiGraph()
-
-        # Add graph attributes from original graph
         for key, value in self.original_G.graph.items():
             self.selected_G.graph[key] = value
 
-        # Store selected node and edge IDs
         self.selected_nodes = set()
         self.selected_edges = set()
-        self.arterial_edges = set()  # New set to store arterial road edges
+        self.arterial_edges = set()
 
-        # Interaction state
-        self.mode = 'nodes'  # 'nodes', 'edges', or 'arterial'
+        self.mode = 'nodes'
         self.selecting = False
-        self.temp_edge = []  # Temporarily store nodes for edge selection
+        self.temp_edge = []
 
-        # Create plot window
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
-        plt.subplots_adjust(bottom=0.2, top=0.9)  # Make space for buttons and title
-
-        # Add buttons
+        plt.subplots_adjust(bottom=0.2, top=0.9)
         self.add_buttons()
-
-        # Initial map draw
         self.draw_map()
         self.connect_events()
-
         plt.tight_layout()
         plt.show()
 
     def add_buttons(self):
-        # Add toggle mode button
         ax_toggle = plt.axes([0.15, 0.05, 0.2, 0.075])
         self.btn_toggle = Button(ax_toggle, 'Switch to Road Selection')
         self.btn_toggle.on_clicked(self.toggle_mode)
 
-        # Add arterial road toggle button (new)
         ax_arterial = plt.axes([0.15, 0.13, 0.2, 0.075])
         self.btn_arterial = Button(ax_arterial, 'Switch to Arterial Selection')
         self.btn_arterial.on_clicked(self.toggle_arterial)
 
-        # Add done button
         ax_done = plt.axes([0.4, 0.05, 0.2, 0.075])
         self.btn_done = Button(ax_done, 'Complete Selection')
         self.btn_done.on_clicked(self.finalize_selection)
 
-        # Add reset button
         ax_reset = plt.axes([0.65, 0.05, 0.2, 0.075])
         self.btn_reset = Button(ax_reset, 'Reset')
         self.btn_reset.on_clicked(self.reset_selection)
 
     def draw_map(self):
         self.ax.clear()
-
-        # Draw original map edges
         edges = self.edges.copy()
         edge_colors = ['grey'] * len(edges)
         edge_widths = [1] * len(edges)
 
-        # Highlight selected edges and arterial roads
         for i, (u, v, k) in enumerate(edges.index):
             if (u, v, k) in self.selected_edges:
                 if (u, v, k) in self.arterial_edges:
-                    edge_colors[i] = 'black'  # Arterial roads are black
-                    edge_widths[i] = 4  # And thicker
+                    edge_colors[i] = 'black'
+                    edge_widths[i] = 4
                 else:
-                    edge_colors[i] = 'blue'  # Regular selected roads are blue
+                    edge_colors[i] = 'blue'
                     edge_widths[i] = 3
 
-        # Draw edges
         edges.plot(ax=self.ax, color=edge_colors, linewidth=edge_widths, alpha=0.7)
 
-        # Draw original nodes
         node_colors = ['lightgrey'] * len(self.nodes)
         node_sizes = [30] * len(self.nodes)
 
-        # Highlight selected nodes
         for i, node_id in enumerate(self.nodes.index):
             if node_id in self.selected_nodes:
                 node_colors[i] = 'red'
                 node_sizes[i] = 100
 
-        # Draw nodes
         self.nodes.plot(ax=self.ax, color=node_colors, markersize=node_sizes, alpha=0.8)
-
-        # Set location name as the main title
         plt.suptitle(self.location_name, fontsize=16, y=0.98)
 
         if self.mode == 'nodes':
@@ -126,13 +96,12 @@ class RoadNetworkSelector:
             subtitle = 'Selection Mode: Roads - Click two nodes to select shortest path between them'
             self.btn_toggle.label.set_text('Switch to Node Selection')
             self.btn_arterial.label.set_text('Switch to Arterial Selection')
-        else:  # arterial mode
+        else:
             subtitle = 'Selection Mode: Arterial Roads - Click on roads to mark/unmark as arterial'
             self.btn_toggle.label.set_text('Switch to Node Selection')
             self.btn_arterial.label.set_text('Switch to Road Selection')
 
         plt.title(subtitle, fontsize=12)
-
         self.ax.set_xlabel('Longitude')
         self.ax.set_ylabel('Latitude')
         self.fig.canvas.draw_idle()
@@ -147,7 +116,7 @@ class RoadNetworkSelector:
         else:
             self.mode = 'nodes'
             self.btn_toggle.label.set_text('Switch to Road Selection')
-        self.temp_edge = []  # Reset temporary edge
+        self.temp_edge = []
         self.draw_map()
 
     def toggle_arterial(self, event):
@@ -157,123 +126,83 @@ class RoadNetworkSelector:
         else:
             self.mode = 'arterial'
             self.btn_arterial.label.set_text('Switch to Road Selection')
-        self.temp_edge = []  # Reset temporary edge
+        self.temp_edge = []
         self.draw_map()
 
     def on_click(self, event):
         if event.inaxes != self.ax:
             return
-
         if self.mode == 'nodes':
             self.select_node(event)
         elif self.mode == 'edges':
             self.select_edge(event)
-        else:  # arterial mode
+        else:
             self.select_arterial(event)
 
     def select_node(self, event):
-        # Get click position
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
-
-        # Find nearest node
         min_dist = float('inf')
         nearest_node = None
-
         for node_id, node_data in self.nodes.iterrows():
             node_geom = node_data.geometry
             dist = node_geom.distance(click_point)
             if dist < min_dist:
                 min_dist = dist
                 nearest_node = node_id
-
-        # If node found and close enough (30 units is an empirical value, adjust as needed)
         if nearest_node is not None and min_dist < 100:
             if nearest_node in self.selected_nodes:
-                # Remove the node (do NOT remove any edges)
                 self.selected_nodes.remove(nearest_node)
                 print(f"取消选择节点: {nearest_node}，但保留相关边")
             else:
                 self.selected_nodes.add(nearest_node)
                 print(f"选择节点: {nearest_node}")
-
-            # Redraw the map
             self.draw_map()
 
     def select_edge(self, event):
-        # Get click position
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
-
-        # Find nearest node
         min_dist = float('inf')
         nearest_node = None
-
         for node_id, node_data in self.nodes.iterrows():
             node_geom = node_data.geometry
             dist = node_geom.distance(click_point)
             if dist < min_dist:
                 min_dist = dist
                 nearest_node = node_id
-
-        # If node found and close enough
         if nearest_node is not None and min_dist < 100:
             self.temp_edge.append(nearest_node)
             print(f"选择节点: {nearest_node}")
-
-            # If two nodes selected, find and add shortest path between them
             if len(self.temp_edge) == 2:
                 start_node, end_node = self.temp_edge
-
-                # Find shortest path
                 path = self.find_shortest_path(start_node, end_node)
-
                 if path:
-                    # Add all nodes in the path
                     for node in path:
                         self.selected_nodes.add(node)
-
-                    # Add all edges along the path
                     for i in range(len(path) - 1):
                         u, v = path[i], path[i + 1]
                         if self.original_G.has_edge(u, v):
-                            # There might be multiple edges between the same nodes
-                            # Get all edges between u and v
                             for k in self.original_G.get_edge_data(u, v).keys():
                                 self.selected_edges.add((u, v, k))
                                 print(f"添加边: ({u}, {v}, {k})")
-
                     print(f"已添加从 {start_node} 到 {end_node} 的最短路径，共包含 {len(path)} 个节点")
-
-                # Reset temporary edge
                 self.temp_edge = []
-
-            # Redraw the map
             self.draw_map()
 
     def select_arterial(self, event):
-        # Get click position
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
-
-        # Find nearest edge
         min_dist = float('inf')
         nearest_edge = None
-
         for edge_idx, edge_data in self.edges.iterrows():
             edge_geom = edge_data.geometry
             dist = edge_geom.distance(click_point)
             if dist < min_dist:
                 min_dist = dist
                 nearest_edge = edge_idx
-
-        # If edge found and close enough (30 units is an empirical value, adjust as needed)
         if nearest_edge is not None and min_dist < 30:
             u, v, k = nearest_edge
-
-            # Check if this edge is already selected
             if (u, v, k) in self.selected_edges:
-                # Toggle arterial road status
                 if (u, v, k) in self.arterial_edges:
                     self.arterial_edges.remove((u, v, k))
                     print(f"取消主干道标记: ({u}, {v}, {k})")
@@ -281,23 +210,15 @@ class RoadNetworkSelector:
                     self.arterial_edges.add((u, v, k))
                     print(f"标记为主干道: ({u}, {v}, {k})")
             else:
-                # Add edge to selected edges first, then mark as arterial
                 self.selected_edges.add((u, v, k))
                 self.arterial_edges.add((u, v, k))
-
-                # Also add the nodes to selected nodes
                 self.selected_nodes.add(u)
                 self.selected_nodes.add(v)
-
                 print(f"添加并标记为主干道: ({u}, {v}, {k})")
-
-            # Redraw the map
             self.draw_map()
 
     def find_shortest_path(self, start_node, end_node):
-        """Find the shortest path between two nodes based on edge length"""
         try:
-            # Try to find path in original graph
             path = nx.shortest_path(self.original_G, start_node, end_node, weight='length')
             return path
         except nx.NetworkXNoPath:
@@ -305,58 +226,70 @@ class RoadNetworkSelector:
             return None
 
     def finalize_selection(self, event):
-        # Check if there are any nodes or edges selected
         if len(self.selected_nodes) == 0:
             print("没有选择任何节点")
             return
-
         if len(self.selected_edges) == 0:
             print("没有选择任何有效边")
             return
 
-        # Create selected subgraph - use MultiDiGraph instead of DiGraph
         self.selected_G = nx.MultiDiGraph()
-
-        # Copy graph attributes from original graph
         for key, value in self.original_G.graph.items():
             self.selected_G.graph[key] = value
-
-        # Add selected nodes (only those in self.selected_nodes)
         for node_id in self.selected_nodes:
             if node_id in self.original_G.nodes:
                 node_data = self.original_G.nodes[node_id]
                 self.selected_G.add_node(node_id, **node_data)
-
-        # Add selected edges (even if they connect到未选中的节点)
         for u, v, k in self.selected_edges:
             if self.original_G.has_edge(u, v, key=k):
-                # 保证边的两个端点都在selected_G里
                 for node in [u, v]:
                     if node not in self.selected_G.nodes and node in self.original_G.nodes:
                         node_data = self.original_G.nodes[node]
                         self.selected_G.add_node(node, **node_data)
                 edge_data = self.original_G.get_edge_data(u, v, key=k)
-                # Add arterial flag to edge attributes
                 edge_data['arterial'] = (u, v, k) in self.arterial_edges
                 self.selected_G.add_edge(u, v, key=k, **edge_data)
-
-        # Create new window to display selected network
         self.display_selected_network()
 
     def display_selected_network(self):
         try:
-            # Create new window
             fig, ax = plt.subplots(figsize=(10, 8))
-
-            # 获取所有边和节点
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
 
+            # --------- 区域上色核心修正 ----------
+            arterial_lines = []
+            for (u, v, k) in self.arterial_edges:
+                if (u, v, k) in edges.index:
+                    edge_geom = edges.loc[(u, v, k)].geometry
+                    if edge_geom.geom_type == 'MultiLineString':
+                        for line in edge_geom.geoms:
+                            arterial_lines.append(line)
+                    elif edge_geom.geom_type == 'LineString':
+                        arterial_lines.append(edge_geom)
+            # 合并和修正端点
+            if arterial_lines:
+                merged = linemerge(arterial_lines)
+                merged = snap(merged, merged, tolerance=1e-6)
+                if hasattr(merged, '__iter__'):
+                    lines_for_poly = list(merged)
+                else:
+                    lines_for_poly = [merged]
+                polygons = list(polygonize(lines_for_poly))
+                fill_polys = []
+                for poly in polygons:
+                    if poly.area > 10:  # 过滤碎片
+                        fill_polys.append(poly)
+                region_colors = itertools.cycle([
+                    '#FFEDA0', '#A1D99B', '#9ECAE1', '#FEC44F', '#FB6A4A', '#BCBDDC', '#FEE0D2', '#BDBDBD'
+                ])
+                for idx, poly in enumerate(fill_polys):
+                    x, y = poly.exterior.xy
+                    ax.fill(x, y, color=next(region_colors), alpha=0.4, label=f'Region {idx+1}' if idx==0 else "")
+            # --------- END 区域上色 ----------
+
             if len(edges) > 0:
-                # 步骤1: 首先画原始边，区分普通道路和干路
                 edge_colors = []
                 edge_widths = []
-
-                # Set color and width based on arterial attribute
                 for _, edge_data in edges.iterrows():
                     if edge_data.get('arterial', False):
                         edge_colors.append('black')
@@ -364,95 +297,62 @@ class RoadNetworkSelector:
                     else:
                         edge_colors.append('blue')
                         edge_widths.append(2)
-
-                # Plot edges with their respective colors and widths
                 edges.plot(ax=ax, color=edge_colors, linewidth=edge_widths)
-
-                # 步骤2: 获取所有红色节点
                 selected_node_set = set([node for node in self.selected_nodes if node in self.selected_G.nodes()])
-
-                # 步骤3: 直接处理网络中的每条实体边
-                processed_pairs = set()  # 防止重复处理同一对节点
-                edge_lengths = {}  # 存储每对节点之间的边长
-
-                # 处理图中的所有边
+                processed_pairs = set()
+                edge_lengths = {}
                 for u, v, k, data in self.selected_G.edges(keys=True, data=True):
-                    # 跳过已处理的节点对
                     if (u, v) in processed_pairs or (v, u) in processed_pairs:
                         continue
-
-                    # 检查是否是连接两个红色节点的直接边
                     if u in selected_node_set and v in selected_node_set:
-                        # 这是两个红色节点间的直接边
                         length = data.get('length', 0)
                         edge_lengths[(u, v)] = length
                         processed_pairs.add((u, v))
-
-                    # 处理一端是红色节点的边
                     elif u in selected_node_set or v in selected_node_set:
-                        # 确定哪个是红色节点，哪个是普通节点
                         red_node = u if u in selected_node_set else v
                         other_node = v if red_node == u else u
-
-                        # 从普通节点出发，寻找可能连接到的下一个红色节点
                         visited = {red_node, other_node}
                         queue = [(other_node, red_node, data.get('length', 0))]
-
                         while queue:
                             current, start_red, current_length = queue.pop(0)
-
                             for neighbor in self.selected_G.neighbors(current):
                                 if neighbor in visited:
                                     continue
-
-                                # 计算这条边的长度
                                 edge_keys = list(self.selected_G.get_edge_data(current, neighbor).keys())
                                 if edge_keys:
-                                    edge_data = self.selected_G.get_edge_data(current, neighbor, edge_keys[0])
-                                    edge_length = edge_data.get('length', 0)
+                                    edge_data2 = self.selected_G.get_edge_data(current, neighbor, edge_keys[0])
+                                    edge_length = edge_data2.get('length', 0)
                                     total_length = current_length + edge_length
-
                                     if neighbor in selected_node_set:
-                                        # 找到了另一个红色节点，保存这条路径
                                         if ((start_red, neighbor) not in processed_pairs and
                                                 (neighbor, start_red) not in processed_pairs):
                                             edge_lengths[(start_red, neighbor)] = total_length
                                             processed_pairs.add((start_red, neighbor))
                                         break
                                     else:
-                                        # 继续搜索
                                         visited.add(neighbor)
                                         queue.append((neighbor, start_red, total_length))
-
-                # 步骤4: 在图上标记边长度
                 for (u, v), length in edge_lengths.items():
-                    # 计算边的中点
                     u_coords = (nodes.loc[u].geometry.x, nodes.loc[u].geometry.y)
                     v_coords = (nodes.loc[v].geometry.x, nodes.loc[v].geometry.y)
                     mid_x = (u_coords[0] + v_coords[0]) / 2
                     mid_y = (u_coords[1] + v_coords[1]) / 2
-
-                    # 在中点显示边长
                     ax.text(mid_x, mid_y, f"{length:.1f}m",
                             fontsize=9, color='green', backgroundcolor='white',
                             ha='center', va='center', weight='bold')
-
-            # 只画self.selected_nodes中的节点
             if len(self.selected_nodes) > 0:
-                # 获取self.selected_nodes对应的gdf（用原nodes表过滤）
                 selected_node_ids = [node_id for node_id in self.selected_nodes if node_id in nodes.index]
                 if selected_node_ids:
                     plot_nodes = nodes.loc[selected_node_ids]
                     plot_nodes.plot(ax=ax, color='red', markersize=50)
-
-            # Add legend for road types
             from matplotlib.lines import Line2D
             legend_elements = [
                 Line2D([0], [0], color='blue', linewidth=2, label='Regular Road'),
-                Line2D([0], [0], color='black', linewidth=4, label='Arterial Road')
+                Line2D([0], [0], color='black', linewidth=4, label='Arterial Road'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label='Selected Node'),
+                Line2D([0], [0], color='#FFEDA0', lw=10, alpha=0.4, label='Region')
             ]
             ax.legend(handles=legend_elements, loc='upper right')
-
             ax.set_title(f'Selected Road Network - {self.location_name}')
             plt.tight_layout()
             plt.show()
@@ -468,13 +368,12 @@ class RoadNetworkSelector:
     def reset_selection(self, event):
         self.selected_nodes = set()
         self.selected_edges = set()
-        self.arterial_edges = set()  # Reset arterial edges too
+        self.arterial_edges = set()
         self.temp_edge = []
         self.draw_map()
         print("已重置所有选择")
 
 if __name__ == "__main__":
-    # Nishinomiya, Hyogo, Japan
     selector = RoadNetworkSelector(
         location=(34.7378, 135.3423),
         dist=1000,
