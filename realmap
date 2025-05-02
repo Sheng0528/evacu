@@ -6,7 +6,6 @@ import numpy as np
 from shapely.geometry import Point, LineString
 from collections import defaultdict
 
-
 class RoadNetworkSelector:
     def __init__(self, location=None, dist=1000, location_name=""):
         # Store location name
@@ -473,7 +472,6 @@ class RoadNetworkSelector:
         self.temp_edge = []
         self.draw_map()
         print("已重置所有选择")
-
 
 if __name__ == "__main__":
     # Nishinomiya, Hyogo, Japan
