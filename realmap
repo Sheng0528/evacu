@@ -162,61 +162,57 @@ class RoadNetworkSelector:
     def select_edge(self, event):
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
-        # 检查是否点中了已选边
-        min_dist = float('inf')
-        nearest_edge = None
-        for edge_idx in self.selected_edges:
-            if edge_idx in self.edges.index:
-                edge_geom = self.edges.loc[edge_idx].geometry
-                dist = edge_geom.distance(click_point)
-                if dist < min_dist:
-                    min_dist = dist
-                    nearest_edge = edge_idx
-        # 如果足够接近某条已选边，直接删除
-        if nearest_edge is not None and min_dist < 30:
-            self.selected_edges.remove(nearest_edge)
-            # 还原主干道标记
-            if nearest_edge in self.arterial_edges:
-                self.arterial_edges.remove(nearest_edge)
-            # 检查节点是否还属于其他选中边，否则可一并移除
-            u, v, k = nearest_edge
-            node_still_used = False
-            for e in self.selected_edges:
-                if u in e[:2] or v in e[:2]:
-                    node_still_used = True
-                    break
-            if not node_still_used:
-                for node in [u, v]:
-                    if node in self.selected_nodes:
-                        self.selected_nodes.remove(node)
-            print(f"已取消选择道路: {nearest_edge}")
-            self.draw_map()
-            return
-        # 否则，进入原有“两点选路”逻辑
-        min_dist = float('inf')
+
+        # 先判断最近节点
+        min_node_dist = float('inf')
         nearest_node = None
         for node_id, node_data in self.nodes.iterrows():
             node_geom = node_data.geometry
             dist = node_geom.distance(click_point)
-            if dist < min_dist:
-                min_dist = dist
+            if dist < min_node_dist:
+                min_node_dist = dist
                 nearest_node = node_id
-        if nearest_node is not None and min_dist < 100:
+
+        # 只有距离节点比较远时，才考虑查边
+        node_threshold = 40  # 可以根据实际交互调整，建议30~50
+
+        if min_node_dist >= node_threshold:
+            # 查找最近边
+            min_edge_dist = float('inf')
+            nearest_edge = None
+            for edge_idx in self.selected_edges:
+                if edge_idx in self.edges.index:
+                    edge_geom = self.edges.loc[edge_idx].geometry
+                    dist = edge_geom.distance(click_point)
+                    if dist < min_edge_dist:
+                        min_edge_dist = dist
+                        nearest_edge = edge_idx
+            if nearest_edge is not None and min_edge_dist < 30:
+                self.selected_edges.remove(nearest_edge)
+                if nearest_edge in self.arterial_edges:
+                    self.arterial_edges.remove(nearest_edge)
+                print(f"已取消选择道路: {nearest_edge}")
+                self.draw_map()
+                return
+
+        # 只要距离最近节点不大于阈值，就走选节点逻辑
+        if nearest_node is not None and min_node_dist < 100:
             self.temp_edge.append(nearest_node)
             print(f"选择节点: {nearest_node}")
             if len(self.temp_edge) == 2:
                 start_node, end_node = self.temp_edge
                 path = self.find_shortest_path(start_node, end_node)
                 if path:
-                    for node in path:
-                        self.selected_nodes.add(node)
+                    # 只选中起点和终点
+                    self.selected_nodes.add(start_node)
+                    self.selected_nodes.add(end_node)
                     for i in range(len(path) - 1):
                         u, v = path[i], path[i + 1]
                         if self.original_G.has_edge(u, v):
                             for k in self.original_G.get_edge_data(u, v).keys():
                                 self.selected_edges.add((u, v, k))
                                 print(f"添加边: ({u}, {v}, {k})")
-                    print(f"已添加从 {start_node} 到 {end_node} 的最短路径，共包含 {len(path)} 个节点")
+                    print(f"已添加从 {start_node} 到 {end_node} 的最短路径对应的边，只选中两端节点")
                 self.temp_edge = []
             self.draw_map()
 
@@ -412,7 +408,7 @@ class RoadNetworkSelector:
 
 if __name__ == "__main__":
     selector = RoadNetworkSelector(
-        location=(35.010221, 135.768158),  # 东京台场中心坐标
-        dist=2000,
-        location_name="Kyoto Nakagyo"
+        location=(43.061936, 141.354292),
+        dist=1500,
+        location_name="Hokkaido Sapporo"
     )
