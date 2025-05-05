@@ -162,6 +162,37 @@ class RoadNetworkSelector:
     def select_edge(self, event):
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
+        # 检查是否点中了已选边
+        min_dist = float('inf')
+        nearest_edge = None
+        for edge_idx in self.selected_edges:
+            if edge_idx in self.edges.index:
+                edge_geom = self.edges.loc[edge_idx].geometry
+                dist = edge_geom.distance(click_point)
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_edge = edge_idx
+        # 如果足够接近某条已选边，直接删除
+        if nearest_edge is not None and min_dist < 30:
+            self.selected_edges.remove(nearest_edge)
+            # 还原主干道标记
+            if nearest_edge in self.arterial_edges:
+                self.arterial_edges.remove(nearest_edge)
+            # 检查节点是否还属于其他选中边，否则可一并移除
+            u, v, k = nearest_edge
+            node_still_used = False
+            for e in self.selected_edges:
+                if u in e[:2] or v in e[:2]:
+                    node_still_used = True
+                    break
+            if not node_still_used:
+                for node in [u, v]:
+                    if node in self.selected_nodes:
+                        self.selected_nodes.remove(node)
+            print(f"已取消选择道路: {nearest_edge}")
+            self.draw_map()
+            return
+        # 否则，进入原有“两点选路”逻辑
         min_dist = float('inf')
         nearest_node = None
         for node_id, node_data in self.nodes.iterrows():
@@ -256,7 +287,7 @@ class RoadNetworkSelector:
             fig, ax = plt.subplots(figsize=(10, 8))
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
 
-            # --------- 区域上色核心修正 ----------
+            # --------- 区域上色及形心标记 ----------
             arterial_lines = []
             for (u, v, k) in self.arterial_edges:
                 if (u, v, k) in edges.index:
@@ -266,7 +297,7 @@ class RoadNetworkSelector:
                             arterial_lines.append(line)
                     elif edge_geom.geom_type == 'LineString':
                         arterial_lines.append(edge_geom)
-            # 合并和修正端点
+            region_centroids = []  # 存储形心
             if arterial_lines:
                 merged = linemerge(arterial_lines)
                 merged = snap(merged, merged, tolerance=1e-6)
@@ -277,7 +308,7 @@ class RoadNetworkSelector:
                 polygons = list(polygonize(lines_for_poly))
                 fill_polys = []
                 for poly in polygons:
-                    if poly.area > 10:  # 过滤碎片
+                    if poly.area > 10:
                         fill_polys.append(poly)
                 region_colors = itertools.cycle([
                     '#FFEDA0', '#A1D99B', '#9ECAE1', '#FEC44F', '#FB6A4A', '#BCBDDC', '#FEE0D2', '#BDBDBD'
@@ -285,7 +316,12 @@ class RoadNetworkSelector:
                 for idx, poly in enumerate(fill_polys):
                     x, y = poly.exterior.xy
                     ax.fill(x, y, color=next(region_colors), alpha=0.4, label=f'Region {idx+1}' if idx==0 else "")
-            # --------- END 区域上色 ----------
+                    # 计算形心
+                    centroid = poly.centroid
+                    region_centroids.append(centroid)
+                    # 用三角形标出形心
+                    ax.scatter(centroid.x, centroid.y, marker='^', s=150, color="orange", edgecolor="black", label="需求点" if idx==0 else "")
+            # --------- END 区域上色及形心 ----------
 
             if len(edges) > 0:
                 edge_colors = []
@@ -350,7 +386,8 @@ class RoadNetworkSelector:
                 Line2D([0], [0], color='blue', linewidth=2, label='Regular Road'),
                 Line2D([0], [0], color='black', linewidth=4, label='Arterial Road'),
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label='Selected Node'),
-                Line2D([0], [0], color='#FFEDA0', lw=10, alpha=0.4, label='Region')
+                Line2D([0], [0], color='#FFEDA0', lw=10, alpha=0.4, label='Region'),
+                Line2D([0], [0], marker='^', color='w', markerfacecolor='orange', markeredgecolor='black', markersize=12, label='Needs point')
             ]
             ax.legend(handles=legend_elements, loc='upper right')
             ax.set_title(f'Selected Road Network - {self.location_name}')
@@ -375,7 +412,7 @@ class RoadNetworkSelector:
 
 if __name__ == "__main__":
     selector = RoadNetworkSelector(
-        location=(34.7378, 135.3423),
-        dist=1000,
-        location_name="Nishinomiya, Hyogo"
+        location=(35.010221, 135.768158),  # 东京台场中心坐标
+        dist=2000,
+        location_name="Kyoto Nakagyo"
     )
