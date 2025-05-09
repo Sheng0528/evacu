@@ -8,6 +8,7 @@ from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
 
+
 class RoadNetworkSelector:
     def __init__(self, location=None, dist=1000, location_name=""):
         self.location_name = location_name if location_name else "Selected Area"
@@ -342,7 +343,7 @@ class RoadNetworkSelector:
         try:
             fig, ax = plt.subplots(figsize=(10, 8))
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
-            # --------- 区域上色及形心标记 ----------
+
             arterial_lines = []
             for (u, v, k) in self.arterial_edges:
                 if (u, v, k) in edges.index:
@@ -353,7 +354,12 @@ class RoadNetworkSelector:
                     elif edge_geom.geom_type == 'LineString':
                         arterial_lines.append(edge_geom)
             region_centroids = []  # 存储形心
+            fill_polys = []
             if arterial_lines:
+                from shapely.geometry import Point
+                from shapely.ops import polygonize, linemerge, snap
+                import itertools
+
                 merged = linemerge(arterial_lines)
                 merged = snap(merged, merged, tolerance=1e-6)
                 if hasattr(merged, '__iter__'):
@@ -361,7 +367,6 @@ class RoadNetworkSelector:
                 else:
                     lines_for_poly = [merged]
                 polygons = list(polygonize(lines_for_poly))
-                fill_polys = []
                 for poly in polygons:
                     if poly.area > 10:
                         fill_polys.append(poly)
@@ -377,7 +382,16 @@ class RoadNetworkSelector:
                     # 用三角形标出形心
                     ax.scatter(centroid.x, centroid.y, marker='^', s=150, color="orange", edgecolor="black",
                                label="需求点" if idx == 0 else "")
-            # --------- END 区域上色及形心 ----------
+                    for p_node in getattr(self, 'gathering_points', []):
+                        if p_node in nodes.index:
+                            p_geom = nodes.loc[p_node].geometry
+                            # 仅连本区内部（不包括边界上）的集合点
+                            if poly.contains(p_geom):
+                                ax.plot([centroid.x, p_geom.x], [centroid.y, p_geom.y], 'k--', linewidth=1.5)
+                                mid_x = (centroid.x + p_geom.x) / 2
+                                mid_y = (centroid.y + p_geom.y) / 2
+                                ax.text(mid_x, mid_y, '0', fontsize=10, color='blue')
+
             if len(edges) > 0:
                 edge_colors = []
                 edge_widths = []
@@ -389,24 +403,6 @@ class RoadNetworkSelector:
                         edge_colors.append('blue')
                         edge_widths.append(2)
                 edges.plot(ax=ax, color=edge_colors, linewidth=edge_widths)
-
-                # Node coloring
-                node_colors = []
-                node_sizes = []
-                for node_id, node_data in nodes.iterrows():
-                    if node_id in self.gathering_points:  # New: Mark gathering points as green
-                        node_colors.append('green')
-                        node_sizes.append(150)
-                    elif node_id in self.selected_nodes:
-                        node_colors.append('red')
-                        node_sizes.append(100)
-                    else:
-                        node_colors.append('lightgrey')
-                        node_sizes.append(50)
-
-                # Plot nodes with appropriate colors
-                nodes.plot(ax=ax, color=node_colors, markersize=node_sizes, alpha=0.8)
-
                 selected_node_set = set([node for node in self.selected_nodes if node in self.selected_G.nodes()])
                 processed_pairs = set()
                 edge_lengths = {}
@@ -449,14 +445,16 @@ class RoadNetworkSelector:
                     ax.text(mid_x, mid_y, f"{length:.1f}m",
                             fontsize=9, color='green', backgroundcolor='white',
                             ha='center', va='center', weight='bold')
-
+            if len(self.selected_nodes) > 0:
+                selected_node_ids = [node_id for node_id in self.selected_nodes if node_id in nodes.index]
+                if selected_node_ids:
+                    plot_nodes = nodes.loc[selected_node_ids]
+                    plot_nodes.plot(ax=ax, color='red', markersize=50)
             from matplotlib.lines import Line2D
             legend_elements = [
                 Line2D([0], [0], color='blue', linewidth=2, label='Regular Road'),
                 Line2D([0], [0], color='black', linewidth=4, label='Arterial Road'),
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label='Selected Node'),
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=8,
-                       label='Gathering Point P'),  # New: Add gathering point to legend
                 Line2D([0], [0], color='#FFEDA0', lw=10, alpha=0.4, label='Region'),
                 Line2D([0], [0], marker='^', color='w', markerfacecolor='orange', markeredgecolor='black',
                        markersize=12, label='Needs point')
