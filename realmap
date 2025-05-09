@@ -8,18 +8,10 @@ from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
 
-
 class RoadNetworkSelector:
-    def __init__(self, location=None, dist=1000, location_name=""):
+    def __init__(self, location, dist=1000, location_name=""):
         self.location_name = location_name if location_name else "Selected Area"
-
-        if location:
-            self.G = ox.graph_from_point(location, dist=dist, network_type='drive')
-        else:
-            self.G = ox.graph_from_point((31.2304, 121.4737), dist=2000, network_type='drive')
-            if not location_name:
-                self.location_name = "Shanghai"
-
+        self.G = ox.graph_from_point(location, dist=dist, network_type='drive')
         self.G = ox.project_graph(self.G)
         self.nodes, self.edges = ox.graph_to_gdfs(self.G)
         self.original_G = self.G.copy()
