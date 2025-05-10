@@ -15,7 +15,6 @@ class RoadNetworkSelector:
         self.G = ox.project_graph(self.G)
         self.nodes, self.edges = ox.graph_to_gdfs(self.G)
         self.original_G = self.G.copy()
-
         self.selected_G = nx.MultiDiGraph()
         for key, value in self.original_G.graph.items():
             self.selected_G.graph[key] = value
@@ -335,23 +334,21 @@ class RoadNetworkSelector:
         try:
             fig, ax = plt.subplots(figsize=(10, 8))
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
-
             arterial_lines = []
+            arterial_edges_dict = {}  # 新增：主干路边到其LineString映射
             for (u, v, k) in self.arterial_edges:
                 if (u, v, k) in edges.index:
                     edge_geom = edges.loc[(u, v, k)].geometry
                     if edge_geom.geom_type == 'MultiLineString':
                         for line in edge_geom.geoms:
                             arterial_lines.append(line)
+                            arterial_edges_dict[line] = (u, v, k)
                     elif edge_geom.geom_type == 'LineString':
                         arterial_lines.append(edge_geom)
+                        arterial_edges_dict[edge_geom] = (u, v, k)
             region_centroids = []  # 存储形心
             fill_polys = []
             if arterial_lines:
-                from shapely.geometry import Point
-                from shapely.ops import polygonize, linemerge, snap
-                import itertools
-
                 merged = linemerge(arterial_lines)
                 merged = snap(merged, merged, tolerance=1e-6)
                 if hasattr(merged, '__iter__'):
@@ -377,12 +374,69 @@ class RoadNetworkSelector:
                     for p_node in getattr(self, 'gathering_points', []):
                         if p_node in nodes.index:
                             p_geom = nodes.loc[p_node].geometry
-                            # 仅连本区内部（不包括边界上）的集合点
                             if poly.contains(p_geom):
                                 ax.plot([centroid.x, p_geom.x], [centroid.y, p_geom.y], 'k--', linewidth=1.5)
                                 mid_x = (centroid.x + p_geom.x) / 2
                                 mid_y = (centroid.y + p_geom.y) / 2
                                 ax.text(mid_x, mid_y, '0', fontsize=10, color='blue')
+            if len(fill_polys) > 1 and len(self.arterial_edges) > 0:
+                # 1. 为每个小区（polygon）收集其外边界每一段
+                poly_edge_map = []  # List[List[LineString]]，每个小区的外边界段
+                for poly in fill_polys:
+                    coords = list(poly.exterior.coords)
+                    segments = []
+                    for i in range(len(coords) - 1):
+                        seg = LineString([coords[i], coords[i + 1]])
+                        segments.append(seg)
+                    poly_edge_map.append(segments)
+                # 2. 对于每条主干路边，找到哪些小区有这条边
+                arterial_match = {}  # (u,v,k) -> set(小区idx)
+                for (u, v, k) in self.arterial_edges:
+                    if (u, v, k) in edges.index:
+                        edge_geom = edges.loc[(u, v, k)].geometry
+                        if edge_geom.geom_type == 'MultiLineString':
+                            lines = list(edge_geom.geoms)
+                        else:
+                            lines = [edge_geom]
+                        for line in lines:
+                            for idx, segments in enumerate(poly_edge_map):
+                                for seg in segments:
+                                    # 只要有交集长度大于1米就算“拥有”
+                                    if seg.intersection(line).length > 1.0:
+                                        arterial_match.setdefault((u, v, k), set()).add(idx)
+                # 3. 找出所有因为主干路而相邻的小区对
+                adjacent_pairs = set()
+                for match_idxs in arterial_match.values():
+                    if len(match_idxs) == 2:
+                        i, j = sorted(match_idxs)
+                        adjacent_pairs.add((i, j))
+                # 4. 每对相邻小区，找最近代表点连线
+                # 区域代表点
+                region_gathering_points = []
+                for poly in fill_polys:
+                    g_points = []
+                    for p_node in getattr(self, 'gathering_points', []):
+                        if p_node in nodes.index:
+                            p_geom = nodes.loc[p_node].geometry
+                            if poly.contains(p_geom):
+                                g_points.append((p_node, p_geom))
+                    region_gathering_points.append(g_points)
+                for i, j in adjacent_pairs:
+                    points_i = [region_centroids[i]] + [geom for _, geom in region_gathering_points[i]]
+                    points_j = [region_centroids[j]] + [geom for _, geom in region_gathering_points[j]]
+                    min_dist = float('inf')
+                    best_pair = None
+                    for pt1 in points_i:
+                        for pt2 in points_j:
+                            d = pt1.distance(pt2)
+                            if d < min_dist:
+                                min_dist = d
+                                best_pair = (pt1, pt2)
+                    if best_pair:
+                        ax.plot([best_pair[0].x, best_pair[1].x], [best_pair[0].y, best_pair[1].y],
+                                'k-', linewidth=2)
+                        mx, my = (best_pair[0].x + best_pair[1].x) / 2, (best_pair[0].y + best_pair[1].y) / 2
+                        ax.text(mx, my, '1', fontsize=12, color='purple', weight='bold')
 
             if len(edges) > 0:
                 edge_colors = []
