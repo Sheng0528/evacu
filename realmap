@@ -8,6 +8,7 @@ from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
 
+
 class RoadNetworkSelector:
     def __init__(self, location, dist=1000, location_name=""):
         self.location_name = location_name if location_name else "Selected Area"
@@ -331,11 +332,32 @@ class RoadNetworkSelector:
         self.display_selected_network()
 
     def display_selected_network(self):
+        def count_crossings(line, arterial_lines):
+            """统计给定LineString与所有主干路交点（不含端点）的次数"""
+            crossings = 0
+            for arterial in arterial_lines:
+                if arterial.geom_type == 'MultiLineString':
+                    sublines = list(arterial.geoms)
+                else:
+                    sublines = [arterial]
+                for subline in sublines:
+                    inter = line.intersection(subline)
+                    if inter.is_empty:
+                        continue
+                    if inter.geom_type == 'Point':
+                        if not Point(line.coords[0]).equals(inter) and not Point(line.coords[-1]).equals(inter):
+                            crossings += 1
+                    elif inter.geom_type == 'MultiPoint':
+                        for pt in inter.geoms:
+                            if not Point(line.coords[0]).equals(pt) and not Point(line.coords[-1]).equals(pt):
+                                crossings += 1
+            return crossings
+
         try:
             fig, ax = plt.subplots(figsize=(10, 8))
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
             arterial_lines = []
-            arterial_edges_dict = {}  # 新增：主干路边到其LineString映射
+            arterial_edges_dict = {}  # 主干路边到其LineString映射
             for (u, v, k) in self.arterial_edges:
                 if (u, v, k) in edges.index:
                     edge_geom = edges.loc[(u, v, k)].geometry
@@ -410,7 +432,7 @@ class RoadNetworkSelector:
                     if len(match_idxs) == 2:
                         i, j = sorted(match_idxs)
                         adjacent_pairs.add((i, j))
-                # 4. 每对相邻小区，找最近代表点连线
+                # 4. 每对相邻小区，找最近代表点连线，并统计穿越主干路次数
                 # 区域代表点
                 region_gathering_points = []
                 for poly in fill_polys:
@@ -433,10 +455,12 @@ class RoadNetworkSelector:
                                 min_dist = d
                                 best_pair = (pt1, pt2)
                     if best_pair:
+                        line_between = LineString([best_pair[0], best_pair[1]])
+                        crossings = count_crossings(line_between, arterial_lines)
                         ax.plot([best_pair[0].x, best_pair[1].x], [best_pair[0].y, best_pair[1].y],
                                 'k-', linewidth=2)
                         mx, my = (best_pair[0].x + best_pair[1].x) / 2, (best_pair[0].y + best_pair[1].y) / 2
-                        ax.text(mx, my, '1', fontsize=12, color='purple', weight='bold')
+                        ax.text(mx, my, str(crossings), fontsize=12, color='purple', weight='bold')
 
             if len(edges) > 0:
                 edge_colors = []
