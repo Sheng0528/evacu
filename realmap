@@ -8,6 +8,7 @@ from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
 
+
 class RoadNetworkSelector:
     def __init__(self, location, dist=1000, location_name=""):
         self.location_name = location_name if location_name else "Selected Area"
@@ -22,7 +23,8 @@ class RoadNetworkSelector:
         self.selected_nodes = set()
         self.selected_edges = set()
         self.arterial_edges = set()
-        self.gathering_points = set()  # New: Set to store gathering points P
+        self.gathering_points = set()
+        self.gathering_point_capacities = dict()  # 新增：集合点容量
 
         self.mode = 'nodes'
         self.selecting = False
@@ -37,34 +39,32 @@ class RoadNetworkSelector:
         plt.show()
 
     def add_buttons(self):
-        # 按钮宽度和高度
         button_width = 0.15
         button_height = 0.075
-        button_gap = 0.03  # 按钮之间的间隔
+        button_gap = 0.03
 
-        # 计算总宽度和起始x坐标，使按钮居中
         n_buttons = 5
         total_width = n_buttons * button_width + (n_buttons - 1) * button_gap
         start_x = 0.5 - total_width / 2
 
         ax_toggle = plt.axes([start_x, 0.05, button_width, button_height])
-        self.btn_toggle = Button(ax_toggle, 'Node')  # Node Selection
+        self.btn_toggle = Button(ax_toggle, 'Node')
         self.btn_toggle.on_clicked(self.toggle_mode)
 
         ax_arterial = plt.axes([start_x + (button_width + button_gap)*1, 0.05, button_width, button_height])
-        self.btn_arterial = Button(ax_arterial, 'Main Road')  # Arterial Selection
+        self.btn_arterial = Button(ax_arterial, 'Main Road')
         self.btn_arterial.on_clicked(self.toggle_arterial)
 
         ax_gathering = plt.axes([start_x + (button_width + button_gap)*2, 0.05, button_width, button_height])
-        self.btn_gathering = Button(ax_gathering, 'Gathering Point')  # Gathering Points
+        self.btn_gathering = Button(ax_gathering, 'Gathering Point')
         self.btn_gathering.on_clicked(self.toggle_gathering)
 
         ax_done = plt.axes([start_x + (button_width + button_gap)*3, 0.05, button_width, button_height])
-        self.btn_done = Button(ax_done, 'Complete')  # Complete Selection
+        self.btn_done = Button(ax_done, 'Complete')
         self.btn_done.on_clicked(self.finalize_selection)
 
         ax_reset = plt.axes([start_x + (button_width + button_gap)*4, 0.05, button_width, button_height])
-        self.btn_reset = Button(ax_reset, 'Reset')  # Reset
+        self.btn_reset = Button(ax_reset, 'Reset')
         self.btn_reset.on_clicked(self.reset_selection)
 
     def draw_map(self):
@@ -203,19 +203,30 @@ class RoadNetworkSelector:
         if nearest_node is not None and min_dist < 100:
             if nearest_node in self.gathering_points:
                 self.gathering_points.remove(nearest_node)
+                if nearest_node in self.gathering_point_capacities:
+                    del self.gathering_point_capacities[nearest_node]
                 print(f"取消选择集合点P: {nearest_node}")
             else:
                 self.gathering_points.add(nearest_node)
                 if nearest_node not in self.selected_nodes:
                     self.selected_nodes.add(nearest_node)
-                print(f"选择集合点P: {nearest_node}")
+                # 命令行输入容量，避免tkinter和matplotlib冲突
+                try:
+                    capacity_str = input(f"请输入集合点 {nearest_node} 的容量（正整数）：")
+                    capacity = int(capacity_str)
+                    if capacity > 0:
+                        self.gathering_point_capacities[nearest_node] = capacity
+                        print(f"选择集合点P: {nearest_node}, 容量: {capacity}")
+                    else:
+                        print("容量必须为正整数，未保存容量。")
+                except Exception as e:
+                    print(f"输入容量出错：{e}，未保存容量。")
             self.draw_map()
 
     def select_edge(self, event):
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
 
-        # 先判断最近节点
         min_node_dist = float('inf')
         nearest_node = None
         for node_id, node_data in self.nodes.iterrows():
@@ -228,7 +239,6 @@ class RoadNetworkSelector:
         node_threshold = 40
 
         if min_node_dist >= node_threshold:
-            # 查找最近边
             min_edge_dist = float('inf')
             nearest_edge = None
             for edge_idx in self.selected_edges:
@@ -253,23 +263,17 @@ class RoadNetworkSelector:
                 start_node, end_node = self.temp_edge
                 path = self.find_shortest_path(start_node, end_node)
                 if path:
-                    # 更鲁棒：维护所有历史被选路径经过的节点
                     if not hasattr(self, 'selected_path_nodes'):
                         self.selected_path_nodes = set()
-                    # 把所有已有已选路径上的节点加入selected_path_nodes
                     for u, v, k in self.selected_edges:
                         self.selected_path_nodes.add(u)
                         self.selected_path_nodes.add(v)
-                    # 当前路径所有节点
                     path_set = set(path)
-                    # 两端点始终加入
                     self.selected_nodes.add(start_node)
                     self.selected_nodes.add(end_node)
-                    # 新增：只要新路径上的某个节点在历史所有路径中出现过，就自动加入
                     common_nodes = path_set & self.selected_path_nodes
                     for node in common_nodes:
                         self.selected_nodes.add(node)
-                    # 新路径的所有节点都加入selected_path_nodes，便于下一次判断
                     self.selected_path_nodes.update(path_set)
                     for i in range(len(path) - 1):
                         u, v = path[i], path[i + 1]
@@ -298,17 +302,14 @@ class RoadNetworkSelector:
                 start_node, end_node = self.temp_edge
                 path = self.find_shortest_path(start_node, end_node)
                 if path:
-                    # 鲁棒：自动选中所有与历史主干路路径重合的节点
                     if not hasattr(self, 'selected_path_nodes'):
                         self.selected_path_nodes = set()
-                    # 把所有已有主干路上的节点记录下来
                     for u, v, k in self.arterial_edges:
                         self.selected_path_nodes.add(u)
                         self.selected_path_nodes.add(v)
                     path_set = set(path)
                     self.selected_nodes.add(start_node)
                     self.selected_nodes.add(end_node)
-                    # 新路径上只要有节点在历史主干路路径节点里也自动选为节点
                     common_nodes = path_set & self.selected_path_nodes
                     for node in common_nodes:
                         self.selected_nodes.add(node)
@@ -540,6 +541,14 @@ class RoadNetworkSelector:
                 if selected_node_ids:
                     plot_nodes = nodes.loc[selected_node_ids]
                     plot_nodes.plot(ax=ax, color='red', markersize=50)
+            # 新增：显示集合点容量
+            for p_node in getattr(self, 'gathering_points', []):
+                if p_node in nodes.index:
+                    p_geom = nodes.loc[p_node].geometry
+                    capacity = self.gathering_point_capacities.get(p_node, None)
+                    if capacity is not None:
+                        ax.text(p_geom.x, p_geom.y, f"Capacity:{capacity}", fontsize=11, color='darkgreen', weight='bold',
+                                ha='left', va='bottom', bbox=dict(facecolor='white', alpha=0.7, edgecolor='green'))
             from matplotlib.lines import Line2D
             legend_elements = [
                 Line2D([0], [0], color='blue', linewidth=2, label='Regular Road'),
@@ -567,6 +576,7 @@ class RoadNetworkSelector:
         self.selected_edges = set()
         self.arterial_edges = set()
         self.gathering_points = set()
+        self.gathering_point_capacities = dict()
         self.temp_edge = []
         self.draw_map()
         print("已重置所有选择")
