@@ -8,7 +8,6 @@ from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
 
-
 class RoadNetworkSelector:
     def __init__(self, location, dist=1000, location_name=""):
         self.location_name = location_name if location_name else "Selected Area"
@@ -24,7 +23,7 @@ class RoadNetworkSelector:
         self.selected_edges = set()
         self.arterial_edges = set()
         self.gathering_points = set()
-        self.gathering_point_capacities = dict()  # 新增：集合点容量
+        self.gathering_point_capacities = dict()
 
         self.mode = 'nodes'
         self.selecting = False
@@ -32,18 +31,18 @@ class RoadNetworkSelector:
 
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
         plt.subplots_adjust(bottom=0.2, top=0.9)
+        self._init_view = None
         self.add_buttons()
-        self.draw_map()
+        self.draw_map(preserve_view=False)
         self.connect_events()
-        plt.tight_layout()
         plt.show()
 
     def add_buttons(self):
-        button_width = 0.15
+        button_width = 0.12
         button_height = 0.075
-        button_gap = 0.03
+        button_gap = 0.02
 
-        n_buttons = 5
+        n_buttons = 8
         total_width = n_buttons * button_width + (n_buttons - 1) * button_gap
         start_x = 0.5 - total_width / 2
 
@@ -67,7 +66,28 @@ class RoadNetworkSelector:
         self.btn_reset = Button(ax_reset, 'Reset')
         self.btn_reset.on_clicked(self.reset_selection)
 
-    def draw_map(self):
+        ax_zoom_in = plt.axes([start_x + (button_width + button_gap)*5, 0.05, button_width, button_height])
+        self.btn_zoom_in = Button(ax_zoom_in, 'Zoom In')
+        self.btn_zoom_in.on_clicked(self.zoom_in)
+
+        ax_zoom_out = plt.axes([start_x + (button_width + button_gap)*6, 0.05, button_width, button_height])
+        self.btn_zoom_out = Button(ax_zoom_out, 'Zoom Out')
+        self.btn_zoom_out.on_clicked(self.zoom_out)
+
+        ax_zoom_reset = plt.axes([start_x + (button_width + button_gap)*7, 0.05, button_width, button_height])
+        self.btn_zoom_reset = Button(ax_zoom_reset, 'Reset View')
+        self.btn_zoom_reset.on_clicked(self.zoom_reset)
+
+    def draw_map(self, preserve_view=True):
+        if preserve_view:
+            try:
+                xlim = self.ax.get_xlim()
+                ylim = self.ax.get_ylim()
+            except Exception:
+                xlim = ylim = None
+        else:
+            xlim = ylim = None
+
         self.ax.clear()
         edges = self.edges.copy()
         edge_colors = ['grey'] * len(edges)
@@ -122,6 +142,24 @@ class RoadNetworkSelector:
         plt.title(subtitle, fontsize=12)
         self.ax.set_xlabel('Longitude')
         self.ax.set_ylabel('Latitude')
+
+        for node_id in self.gathering_points:
+            if node_id in self.gathering_point_capacities:
+                node_geom = self.nodes.loc[node_id].geometry
+                cap = self.gathering_point_capacities[node_id]
+                self.ax.text(node_geom.x + 10, node_geom.y + 10, f"Capacity: {cap}",
+                             fontsize=10, color='darkgreen', ha='left', va='bottom',
+                             bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', boxstyle='round,pad=0.2'))
+
+        if not hasattr(self, '_init_view') or self._init_view is None:
+            self._init_view = (self.ax.get_xlim(), self.ax.get_ylim())
+        if preserve_view and xlim and ylim:
+            self.ax.set_xlim(xlim)
+            self.ax.set_ylim(ylim)
+        elif not preserve_view and hasattr(self, '_init_view') and self._init_view is not None:
+            self.ax.set_xlim(self._init_view[0])
+            self.ax.set_ylim(self._init_view[1])
+
         self.fig.canvas.draw_idle()
 
     def connect_events(self):
@@ -156,6 +194,36 @@ class RoadNetworkSelector:
             self.btn_gathering.label.set_text('Switch to Road Selection')
         self.temp_edge = []
         self.draw_map()
+
+    def zoom_in(self, event):
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+        xmid = (xlim[0] + xlim[1]) / 2
+        ymid = (ylim[0] + ylim[1]) / 2
+        scale = 0.5
+        xdelta = (xlim[1] - xlim[0]) * scale / 2
+        ydelta = (ylim[1] - ylim[0]) * scale / 2
+        self.ax.set_xlim([xmid - xdelta, xmid + xdelta])
+        self.ax.set_ylim([ymid - ydelta, ymid + ydelta])
+        self.fig.canvas.draw_idle()
+
+    def zoom_out(self, event):
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+        xmid = (xlim[0] + xlim[1]) / 2
+        ymid = (ylim[0] + ylim[1]) / 2
+        scale = 2.0
+        xdelta = (xlim[1] - xlim[0]) * scale / 2
+        ydelta = (ylim[1] - ylim[0]) * scale / 2
+        self.ax.set_xlim([xmid - xdelta, xmid + xdelta])
+        self.ax.set_ylim([ymid - ydelta, ymid + ydelta])
+        self.fig.canvas.draw_idle()
+
+    def zoom_reset(self, event):
+        if hasattr(self, '_init_view') and self._init_view is not None:
+            self.ax.set_xlim(self._init_view[0])
+            self.ax.set_ylim(self._init_view[1])
+            self.fig.canvas.draw_idle()
 
     def on_click(self, event):
         if event.inaxes != self.ax:
@@ -210,7 +278,6 @@ class RoadNetworkSelector:
                 self.gathering_points.add(nearest_node)
                 if nearest_node not in self.selected_nodes:
                     self.selected_nodes.add(nearest_node)
-                # 命令行输入容量，避免tkinter和matplotlib冲突
                 try:
                     capacity_str = input(f"请输入集合点 {nearest_node} 的容量（正整数）：")
                     capacity = int(capacity_str)
@@ -419,7 +486,7 @@ class RoadNetworkSelector:
                     centroid = poly.centroid
                     region_centroids.append(centroid)
                     ax.scatter(centroid.x, centroid.y, marker='^', s=150, color="orange", edgecolor="black",
-                               label="需求点" if idx == 0 else "")
+                               label="Needs point" if idx == 0 else "")
                     for p_node in getattr(self, 'gathering_points', []):
                         if p_node in nodes.index:
                             p_geom = nodes.loc[p_node].geometry
@@ -541,7 +608,6 @@ class RoadNetworkSelector:
                 if selected_node_ids:
                     plot_nodes = nodes.loc[selected_node_ids]
                     plot_nodes.plot(ax=ax, color='red', markersize=50)
-            # 新增：显示集合点容量
             for p_node in getattr(self, 'gathering_points', []):
                 if p_node in nodes.index:
                     p_geom = nodes.loc[p_node].geometry
@@ -578,7 +644,9 @@ class RoadNetworkSelector:
         self.gathering_points = set()
         self.gathering_point_capacities = dict()
         self.temp_edge = []
-        self.draw_map()
+        if hasattr(self, 'selected_path_nodes'):
+            self.selected_path_nodes = set()
+        self.draw_map(preserve_view=False)
         print("已重置所有选择")
 
 if __name__ == "__main__":
