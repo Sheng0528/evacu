@@ -7,6 +7,7 @@ from shapely.geometry import Point, LineString, Polygon, MultiPolygon
 from shapely.ops import polygonize, unary_union, linemerge, snap
 from collections import defaultdict
 import itertools
+import copy
 
 class RoadNetworkSelector:
     def __init__(self, location, dist=1000, location_name=""):
@@ -28,7 +29,7 @@ class RoadNetworkSelector:
         self.mode = 'nodes'
         self.selecting = False
         self.temp_edge = []
-
+        self._history = []  # 撤销历史栈
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
         plt.subplots_adjust(left=0.12, right=0.88, bottom=0.15, top=0.9)
         self._init_view = None
@@ -70,6 +71,10 @@ class RoadNetworkSelector:
         ax_zoom_reset = plt.axes([0.87, right_base, button_width, button_height])
         self.btn_zoom_reset = Button(ax_zoom_reset, 'Zoom reset')
         self.btn_zoom_reset.on_clicked(self.zoom_reset)
+
+        ax_undo = plt.axes([0.87, right_base - (button_height + button_gap), button_width, button_height])
+        self.btn_undo = Button(ax_undo, 'Revoke')
+        self.btn_undo.on_clicked(self.undo_action)
 
         # --- 底部按钮 ---
         ax_done = plt.axes([0.40, 0.03, 0.10, 0.06])
@@ -240,6 +245,7 @@ class RoadNetworkSelector:
             self.select_gathering_point(event)
 
     def select_node(self, event):
+        self.save_history()
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
         min_dist = float('inf')
@@ -260,6 +266,7 @@ class RoadNetworkSelector:
             self.draw_map()
 
     def select_gathering_point(self, event):
+        self.save_history()
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
         min_dist = float('inf')
@@ -293,9 +300,9 @@ class RoadNetworkSelector:
             self.draw_map()
 
     def select_edge(self, event):
+        self.save_history()
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
-
         min_node_dist = float('inf')
         nearest_node = None
         for node_id, node_data in self.nodes.iterrows():
@@ -355,6 +362,7 @@ class RoadNetworkSelector:
             self.draw_map()
 
     def select_arterial(self, event):
+        self.save_history()
         x, y = event.xdata, event.ydata
         click_point = Point(x, y)
         min_dist = float('inf')
@@ -640,6 +648,7 @@ class RoadNetworkSelector:
             traceback.print_exc()
 
     def reset_selection(self, event):
+        self.save_history()
         self.selected_nodes = set()
         self.selected_edges = set()
         self.arterial_edges = set()
@@ -650,6 +659,38 @@ class RoadNetworkSelector:
             self.selected_path_nodes = set()
         self.draw_map(preserve_view=False)
         print("All selection reset")
+
+    def save_history(self):
+        import copy
+        # 深拷贝重要状态
+        self._history.append((
+            copy.deepcopy(self.selected_nodes),
+            copy.deepcopy(self.selected_edges),
+            copy.deepcopy(self.arterial_edges),
+            copy.deepcopy(self.gathering_points),
+            copy.deepcopy(self.gathering_point_capacities),
+            copy.deepcopy(self.temp_edge),
+            copy.deepcopy(getattr(self, 'selected_path_nodes', set()))
+        ))
+        if len(self._history) > 100:
+            self._history = self._history[-100:]
+
+    def undo_action(self, event):
+        if not self._history:
+            print("没有可撤销的操作")
+            return
+        state = self._history.pop()
+        (self.selected_nodes,
+         self.selected_edges,
+         self.arterial_edges,
+         self.gathering_points,
+         self.gathering_point_capacities,
+         self.temp_edge,
+         selected_path_nodes) = state
+        self.selected_path_nodes = selected_path_nodes
+        self.draw_map()
+        print("已撤销上一步操作")
+
 
 if __name__ == "__main__":
     selector = RoadNetworkSelector(
