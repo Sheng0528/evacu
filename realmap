@@ -30,7 +30,7 @@ class RoadNetworkSelector:
         self.temp_edge = []
 
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
-        plt.subplots_adjust(bottom=0.2, top=0.9)
+        plt.subplots_adjust(left=0.12, right=0.88, bottom=0.15, top=0.9)
         self._init_view = None
         self.add_buttons()
         self.draw_map(preserve_view=False)
@@ -38,45 +38,47 @@ class RoadNetworkSelector:
         plt.show()
 
     def add_buttons(self):
-        button_width = 0.12
-        button_height = 0.075
+        # 按钮宽高
+        button_width = 0.11
+        button_height = 0.06
         button_gap = 0.02
 
-        n_buttons = 8
-        total_width = n_buttons * button_width + (n_buttons - 1) * button_gap
-        start_x = 0.5 - total_width / 2
-
-        ax_toggle = plt.axes([start_x, 0.05, button_width, button_height])
-        self.btn_toggle = Button(ax_toggle, 'Node')
+        # --- 左侧模式按钮 ---
+        left_base = 0.93 - 3 * (button_height + button_gap)
+        ax_node = plt.axes([0.015, left_base + 2 * (button_height + button_gap), button_width, button_height])
+        self.btn_toggle = Button(ax_node, '节点选择')
         self.btn_toggle.on_clicked(self.toggle_mode)
 
-        ax_arterial = plt.axes([start_x + (button_width + button_gap)*1, 0.05, button_width, button_height])
-        self.btn_arterial = Button(ax_arterial, 'Main Road')
+        ax_arterial = plt.axes([0.015, left_base + 1 * (button_height + button_gap), button_width, button_height])
+        self.btn_arterial = Button(ax_arterial, '道路/主干选择')
         self.btn_arterial.on_clicked(self.toggle_arterial)
 
-        ax_gathering = plt.axes([start_x + (button_width + button_gap)*2, 0.05, button_width, button_height])
-        self.btn_gathering = Button(ax_gathering, 'Gathering Point')
+        ax_gathering = plt.axes([0.015, left_base, button_width, button_height])
+        self.btn_gathering = Button(ax_gathering, '集合点选择')
         self.btn_gathering.on_clicked(self.toggle_gathering)
 
-        ax_done = plt.axes([start_x + (button_width + button_gap)*3, 0.05, button_width, button_height])
+        # --- 右侧缩放按钮 ---
+        right_base = 0.93 - 3 * (button_height + button_gap)
+        ax_zoom_in = plt.axes([0.87, right_base + 2 * (button_height + button_gap), button_width, button_height])
+        self.btn_zoom_in = Button(ax_zoom_in, 'Zoom in')
+        self.btn_zoom_in.on_clicked(self.zoom_in)
+
+        ax_zoom_out = plt.axes([0.87, right_base + 1 * (button_height + button_gap), button_width, button_height])
+        self.btn_zoom_out = Button(ax_zoom_out, 'Zoom out')
+        self.btn_zoom_out.on_clicked(self.zoom_out)
+
+        ax_zoom_reset = plt.axes([0.87, right_base, button_width, button_height])
+        self.btn_zoom_reset = Button(ax_zoom_reset, 'Zoom reset')
+        self.btn_zoom_reset.on_clicked(self.zoom_reset)
+
+        # --- 底部按钮 ---
+        ax_done = plt.axes([0.40, 0.03, 0.10, 0.06])
         self.btn_done = Button(ax_done, 'Complete')
         self.btn_done.on_clicked(self.finalize_selection)
 
-        ax_reset = plt.axes([start_x + (button_width + button_gap)*4, 0.05, button_width, button_height])
-        self.btn_reset = Button(ax_reset, 'Reset')
+        ax_reset = plt.axes([0.53, 0.03, 0.10, 0.06])
+        self.btn_reset = Button(ax_reset, 'All reset')
         self.btn_reset.on_clicked(self.reset_selection)
-
-        ax_zoom_in = plt.axes([start_x + (button_width + button_gap)*5, 0.05, button_width, button_height])
-        self.btn_zoom_in = Button(ax_zoom_in, 'Zoom In')
-        self.btn_zoom_in.on_clicked(self.zoom_in)
-
-        ax_zoom_out = plt.axes([start_x + (button_width + button_gap)*6, 0.05, button_width, button_height])
-        self.btn_zoom_out = Button(ax_zoom_out, 'Zoom Out')
-        self.btn_zoom_out.on_clicked(self.zoom_out)
-
-        ax_zoom_reset = plt.axes([start_x + (button_width + button_gap)*7, 0.05, button_width, button_height])
-        self.btn_zoom_reset = Button(ax_zoom_reset, 'Reset View')
-        self.btn_zoom_reset.on_clicked(self.zoom_reset)
 
     def draw_map(self, preserve_view=True):
         if preserve_view:
@@ -251,10 +253,10 @@ class RoadNetworkSelector:
         if nearest_node is not None and min_dist < 100:
             if nearest_node in self.selected_nodes:
                 self.selected_nodes.remove(nearest_node)
-                print(f"取消选择节点: {nearest_node}，但保留相关边")
+                print(f"Node canceled: {nearest_node}")
             else:
                 self.selected_nodes.add(nearest_node)
-                print(f"选择节点: {nearest_node}")
+                print(f"Node Selected: {nearest_node}")
             self.draw_map()
 
     def select_gathering_point(self, event):
@@ -273,21 +275,21 @@ class RoadNetworkSelector:
                 self.gathering_points.remove(nearest_node)
                 if nearest_node in self.gathering_point_capacities:
                     del self.gathering_point_capacities[nearest_node]
-                print(f"取消选择集合点P: {nearest_node}")
+                print(f"Cancel selecting gathering point:{nearest_node}")
             else:
                 self.gathering_points.add(nearest_node)
                 if nearest_node not in self.selected_nodes:
                     self.selected_nodes.add(nearest_node)
                 try:
-                    capacity_str = input(f"请输入集合点 {nearest_node} 的容量（正整数）：")
+                    capacity_str = input(f"Please enter the capacity of gathering point{nearest_node} ：")
                     capacity = int(capacity_str)
                     if capacity > 0:
                         self.gathering_point_capacities[nearest_node] = capacity
-                        print(f"选择集合点P: {nearest_node}, 容量: {capacity}")
+                        print(f"Gathering point selected: {nearest_node},Capacity: {capacity}")
                     else:
-                        print("容量必须为正整数，未保存容量。")
+                        print("Error! Capacity has to be positive int")
                 except Exception as e:
-                    print(f"输入容量出错：{e}，未保存容量。")
+                    print(f"Error! Gathering point{e} incorrect")
             self.draw_map()
 
     def select_edge(self, event):
@@ -319,7 +321,7 @@ class RoadNetworkSelector:
                 self.selected_edges.remove(nearest_edge)
                 if nearest_edge in self.arterial_edges:
                     self.arterial_edges.remove(nearest_edge)
-                print(f"已取消选择道路: {nearest_edge}")
+                print(f"Road cancel: {nearest_edge}")
                 self.draw_map()
                 return
 
@@ -348,7 +350,7 @@ class RoadNetworkSelector:
                             for k in self.original_G.get_edge_data(u, v).keys():
                                 self.selected_edges.add((u, v, k))
                                 print(f"添加边: ({u}, {v}, {k})")
-                    print(f"已添加从 {start_node} 到 {end_node} 的最短路径对应的边，两端点及与任意历史路径节点重合的节点自动选中")
+                    print(f"Edge from{start_node} to {end_node} has been selected")
                 self.temp_edge = []
             self.draw_map()
 
@@ -395,15 +397,15 @@ class RoadNetworkSelector:
             path = nx.shortest_path(self.original_G, start_node, end_node, weight='length')
             return path
         except nx.NetworkXNoPath:
-            print(f"节点 {start_node} 与 {end_node} 之间没有找到路径")
+            print(f"There is NO edge from node {start_node} to {end_node}")
             return None
 
     def finalize_selection(self, event):
         if len(self.selected_nodes) == 0:
-            print("没有选择任何节点")
+            print("Haven't select any available node")
             return
         if len(self.selected_edges) == 0:
-            print("没有选择任何有效边")
+            print("Haven't select any available edge")
             return
 
         self.selected_G = nx.MultiDiGraph()
@@ -629,11 +631,11 @@ class RoadNetworkSelector:
             plt.tight_layout()
             plt.show()
         except ValueError as e:
-            print(f"获取节点和边时出现错误，可能是图为空: {e}")
-            print(f"图中节点数: {len(self.selected_G.nodes)}")
-            print(f"图中边数: {self.selected_G.number_of_edges()}")
+            print(f"Error happens when selecting: {e}")
+            print(f"Total nodes: {len(self.selected_G.nodes)}")
+            print(f"Total edges: {self.selected_G.number_of_edges()}")
         except Exception as e:
-            print(f"显示所选网络时出错: {e}")
+            print(f"Error happens when getting the map: {e}")
             import traceback
             traceback.print_exc()
 
@@ -647,7 +649,7 @@ class RoadNetworkSelector:
         if hasattr(self, 'selected_path_nodes'):
             self.selected_path_nodes = set()
         self.draw_map(preserve_view=False)
-        print("已重置所有选择")
+        print("All selection reset")
 
 if __name__ == "__main__":
     selector = RoadNetworkSelector(
