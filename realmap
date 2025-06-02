@@ -459,9 +459,41 @@ class RoadNetworkSelector:
                                 crossings += 1
             return crossings
 
+        def find_closest_node(point, nodes_gdf, polygon):
+            """Find the closest node to a given point that is inside the polygon"""
+            # 首先筛选出多边形内部的节点
+            nodes_in_polygon = nodes_gdf[nodes_gdf.geometry.apply(lambda g: polygon.contains(g))]
+
+            # 如果多边形内没有节点，则回退到使用边界上的节点
+            if len(nodes_in_polygon) == 0:
+                # 尝试找边界上的节点（与多边形相交的节点）
+                nodes_on_boundary = nodes_gdf[nodes_gdf.geometry.apply(lambda g: polygon.boundary.distance(g) < 1e-8)]
+                if len(nodes_on_boundary) == 0:
+                    # 如果边界上也没有，则使用所有节点
+                    print(f"警告: 一个区域内部或边界上没有找到节点，使用最近的节点。")
+                    distances = nodes_gdf.geometry.distance(point)
+                    closest_node_idx = distances.idxmin()
+                    return closest_node_idx, nodes_gdf.loc[closest_node_idx].geometry
+                else:
+                    # 使用边界上距离最近的节点
+                    print(f"警告: 一个区域内部没有节点，使用边界上最近的节点。")
+                    distances = nodes_on_boundary.geometry.distance(point)
+                    closest_node_idx = distances.idxmin()
+                    return closest_node_idx, nodes_on_boundary.loc[closest_node_idx].geometry
+
+            # 计算内部节点到几何形心的距离
+            distances = nodes_in_polygon.geometry.distance(point)
+            closest_node_idx = distances.idxmin()
+            return closest_node_idx, nodes_in_polygon.loc[closest_node_idx].geometry
+
         try:
             fig, ax = plt.subplots(figsize=(10, 8))
+            # 获取选择的图形的节点和边
             nodes, edges = ox.graph_to_gdfs(self.selected_G)
+
+            # 获取原始完整图形的所有节点，用于找到小区内的节点
+            original_nodes, _ = ox.graph_to_gdfs(self.original_G)
+
             arterial_lines = []
             arterial_edges_dict = {}
             for (u, v, k) in self.arterial_edges:
@@ -475,6 +507,7 @@ class RoadNetworkSelector:
                         arterial_lines.append(edge_geom)
                         arterial_edges_dict[edge_geom] = (u, v, k)
             region_centroids = []
+            region_centroid_nodes = []  # Store the closest nodes to centroids
             fill_polys = []
             if arterial_lines:
                 merged = linemerge(arterial_lines)
@@ -493,17 +526,52 @@ class RoadNetworkSelector:
                 for idx, poly in enumerate(fill_polys):
                     x, y = poly.exterior.xy
                     ax.fill(x, y, color=next(region_colors), alpha=0.4, label=f'Region {idx + 1}' if idx == 0 else "")
+
+                    # Get geometric centroid
                     centroid = poly.centroid
                     region_centroids.append(centroid)
-                    ax.scatter(centroid.x, centroid.y, marker='^', s=150, color="orange", edgecolor="black",
-                               label="Needs point" if idx == 0 else "")
+
+                    # 使用原始图形的所有节点找到小区内距离几何形心最近的节点
+                    closest_node_id, closest_node_geom = find_closest_node(centroid, original_nodes, poly)
+
+                    # 如果找到的节点不在选定的图形中，将其添加到选定图形
+                    if closest_node_id not in self.selected_G.nodes:
+                        if closest_node_id in self.original_G.nodes:
+                            node_data = self.original_G.nodes[closest_node_id]
+                            self.selected_G.add_node(closest_node_id, **node_data)
+                            self.selected_nodes.add(closest_node_id)
+                            print(f"将区域 {idx + 1} 的形心节点 {closest_node_id} 添加到选定节点")
+
+                    region_centroid_nodes.append((closest_node_id, closest_node_geom))
+
+                    # 绘制小区内所有原始节点（小尺寸）
+                    nodes_in_poly = original_nodes[original_nodes.geometry.apply(lambda g: poly.contains(g))]
+                    if len(nodes_in_poly) > 0:
+                        ax.scatter(nodes_in_poly.geometry.x, nodes_in_poly.geometry.y,
+                                   marker='o', s=20, color="lightblue", alpha=0.7,
+                                   label="Interior Nodes" if idx == 0 else "")
+                        print(f"区域 {idx + 1} 内有 {len(nodes_in_poly)} 个节点")
+                    else:
+                        print(f"警告：区域 {idx + 1} 内没有找到节点")
+
+                    # Plot both the geometric centroid (small) and the closest node (larger)
+                    ax.scatter(centroid.x, centroid.y, marker='o', s=50, color="gray", alpha=0.5)
+                    ax.scatter(closest_node_geom.x, closest_node_geom.y, marker='^', s=150, color="orange",
+                               edgecolor="black", label="Needs point" if idx == 0 else "")
+
+                    # Draw a line connecting the geometric centroid to the closest node
+                    ax.plot([centroid.x, closest_node_geom.x], [centroid.y, closest_node_geom.y],
+                            'k:', linewidth=0.8, alpha=0.6)
+
+                    # Connect gathering points to the closest node (centroid node) instead of geometric centroid
                     for p_node in getattr(self, 'gathering_points', []):
                         if p_node in nodes.index:
                             p_geom = nodes.loc[p_node].geometry
                             if poly.contains(p_geom):
-                                ax.plot([centroid.x, p_geom.x], [centroid.y, p_geom.y], 'k--', linewidth=1.5)
-                                mid_x = (centroid.x + p_geom.x) / 2
-                                mid_y = (centroid.y + p_geom.y) / 2
+                                ax.plot([closest_node_geom.x, p_geom.x], [closest_node_geom.y, p_geom.y],
+                                        'k--', linewidth=1.5)
+                                mid_x = (closest_node_geom.x + p_geom.x) / 2
+                                mid_y = (closest_node_geom.y + p_geom.y) / 2
                                 ax.text(mid_x, mid_y, '0', fontsize=10, color='blue')
             if len(fill_polys) > 1 and len(self.arterial_edges) > 0:
                 poly_edge_map = []
@@ -542,8 +610,12 @@ class RoadNetworkSelector:
                                 g_points.append((p_node, p_geom))
                     region_gathering_points.append(g_points)
                 for i, j in adjacent_pairs:
-                    points_i = [region_centroids[i]] + [geom for _, geom in region_gathering_points[i]]
-                    points_j = [region_centroids[j]] + [geom for _, geom in region_gathering_points[j]]
+                    # Use closest nodes to centroids instead of geometric centroids
+                    node_i, geom_i = region_centroid_nodes[i]
+                    node_j, geom_j = region_centroid_nodes[j]
+
+                    points_i = [geom_i] + [geom for _, geom in region_gathering_points[i]]
+                    points_j = [geom_j] + [geom for _, geom in region_gathering_points[j]]
                     min_dist = float('inf')
                     best_pair = None
                     for pt1 in points_i:
@@ -623,8 +695,11 @@ class RoadNetworkSelector:
                     p_geom = nodes.loc[p_node].geometry
                     capacity = self.gathering_point_capacities.get(p_node, None)
                     if capacity is not None:
-                        ax.text(p_geom.x, p_geom.y, f"Capacity:{capacity}", fontsize=11, color='darkgreen', weight='bold',
+                        ax.text(p_geom.x, p_geom.y, f"Capacity:{capacity}", fontsize=11, color='darkgreen',
+                                weight='bold',
                                 ha='left', va='bottom', bbox=dict(facecolor='white', alpha=0.7, edgecolor='green'))
+
+            # Update the legend to include both geometric centroids and actual centroid nodes
             from matplotlib.lines import Line2D
             legend_elements = [
                 Line2D([0], [0], color='blue', linewidth=2, label='Regular Road'),
@@ -632,7 +707,11 @@ class RoadNetworkSelector:
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8, label='Selected Node'),
                 Line2D([0], [0], color='#FFEDA0', lw=10, alpha=0.4, label='Region'),
                 Line2D([0], [0], marker='^', color='w', markerfacecolor='orange', markeredgecolor='black',
-                       markersize=12, label='Needs point')
+                       markersize=12, label='Region Centroid Node'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=5, alpha=0.5,
+                       label='Geometric Centroid'),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='lightblue', markersize=5, alpha=0.7,
+                       label='Interior Nodes')
             ]
             ax.legend(handles=legend_elements, loc='upper right')
             ax.set_title(f'Selected Road Network - {self.location_name}')
