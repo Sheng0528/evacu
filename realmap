@@ -104,12 +104,10 @@ class RoadNetworkSelector:
                 xlim = ylim = None
         else:
             xlim = ylim = None
-
         self.ax.clear()
         edges = self.edges.copy()
         edge_colors = ['grey'] * len(edges)
         edge_widths = [1] * len(edges)
-
         for i, (u, v, k) in enumerate(edges.index):
             if (u, v, k) in self.selected_edges:
                 if (u, v, k) in self.arterial_edges:
@@ -118,12 +116,9 @@ class RoadNetworkSelector:
                 else:
                     edge_colors[i] = 'blue'
                     edge_widths[i] = 3
-
         edges.plot(ax=self.ax, color=edge_colors, linewidth=edge_widths, alpha=0.7)
-
         node_colors = ['lightgrey'] * len(self.nodes)
         node_sizes = [30] * len(self.nodes)
-
         for i, node_id in enumerate(self.nodes.index):
             if node_id in self.gathering_points:
                 node_colors[i] = 'green'
@@ -155,11 +150,9 @@ class RoadNetworkSelector:
             self.btn_toggle.label.set_text('Node Selection')
             self.btn_arterial.label.set_text('MainRoad Selection')
             self.btn_gathering.label.set_text('Road Selection')
-
         plt.title(subtitle, fontsize=12)
         self.ax.set_xlabel('Longitude')
         self.ax.set_ylabel('Latitude')
-
         for node_id in self.gathering_points:
             if node_id in self.gathering_point_capacities:
                 node_geom = self.nodes.loc[node_id].geometry
@@ -321,6 +314,7 @@ class RoadNetworkSelector:
             if dist < min_node_dist:
                 min_node_dist = dist
                 nearest_node = node_id
+
         node_threshold = 40
         if min_node_dist >= node_threshold:
             min_edge_dist = float('inf')
@@ -339,6 +333,7 @@ class RoadNetworkSelector:
                 print(f"Road cancel: {nearest_edge}")
                 self.draw_map()
                 return
+
         if nearest_node is not None and min_node_dist < 100:
             self.temp_edge.append(nearest_node)
             print(f"选择节点: {nearest_node}")
@@ -421,9 +416,11 @@ class RoadNetworkSelector:
         if not self.gathering_points:
             print("错误：没有选择集合点，请先选择集合点")
             return
+
         if not self.region_centroid_nodes:
             print("错误：没有发现小区，请先完成选择以识别小区")
             return
+
         print("\n" + "=" * 60)
         print("正在计算每个需求点到所有集合点的最短距离")
         print("=" * 60)
@@ -434,6 +431,7 @@ class RoadNetworkSelector:
         # 初始化距离矩阵
         centroid_ids = [node_id for node_id, _ in self.region_centroid_nodes]
         gathering_point_ids = list(self.gathering_points)
+
         self.distance_matrix = pd.DataFrame(
             index=centroid_ids,
             columns=gathering_point_ids,
@@ -467,6 +465,7 @@ class RoadNetworkSelector:
 
                         # 获取集合点信息
                         capacity = self.gathering_point_capacities.get(gathering_point, "未设置")
+
                         print(f"  ├─ 集合点 {gathering_point}: {distance:.1f}米 "
                               f"(容量: {capacity}, 路径经过 {len(path)} 个节点)")
                     else:
@@ -526,6 +525,7 @@ class RoadNetworkSelector:
             reachable_distances = distances[distances != float('inf')]
             print(f"\nNP {i + 1} (Node {centroid_id}):")
             print(f"  ├─ 可达集合点数量: {len(reachable_distances)}/{len(self.gathering_points)}")
+
             if len(reachable_distances) > 0:
                 min_dist = reachable_distances.min()
                 max_dist = reachable_distances.max()
@@ -541,16 +541,20 @@ class RoadNetworkSelector:
         # 3. 集合点统计
         print(f"\n【集合点分析】")
         print("-" * 30)
+
         for gp in self.gathering_points:
             distances_to_gp = self.distance_matrix[gp]
             reachable_from = distances_to_gp[distances_to_gp != float('inf')]
             capacity = self.gathering_point_capacities.get(gp, "未设置")
+
             print(f"\n集合点 {gp} (容量: {capacity}):")
             print(f"  ├─ 可被到达的需求点数量: {len(reachable_from)}/{len(self.region_centroid_nodes)}")
+
             if len(reachable_from) > 0:
                 min_approach = reachable_from.min()
                 max_approach = reachable_from.max()
                 avg_approach = reachable_from.mean()
+
                 print(f"  ├─ 最近需求点距离: {min_approach:.1f}米")
                 print(f"  ├─ 最远需求点距离: {max_approach:.1f}米")
                 print(f"  └─ 平均需求点距离: {avg_approach:.1f}米")
@@ -600,6 +604,7 @@ class RoadNetworkSelector:
                     else:
                         ax1.text(j, i, "不可达", ha="center", va="center",
                                  color="gray", fontsize=8)
+
             ax1.set_title('Matrix of distance from NP to GP (m)', fontsize=14, pad=20)
 
             # 添加颜色条
@@ -639,9 +644,7 @@ class RoadNetworkSelector:
             ax2.set_ylabel('Y (m)')
             plt.tight_layout()
             plt.show()
-
             print("✅ 距离矩阵可视化完成！")
-
         except Exception as e:
             print(f"可视化失败: {e}")
             import traceback
@@ -655,6 +658,7 @@ class RoadNetworkSelector:
         if len(self.selected_edges) == 0:
             print("Haven't select any available edge")
             return
+
         self.selected_G = nx.MultiDiGraph()
         for key, value in self.original_G.graph.items():
             self.selected_G.graph[key] = value
@@ -748,11 +752,6 @@ class RoadNetworkSelector:
             # 修改：存储到类属性中以便Dijkstra算法使用
             self.region_centroid_nodes = []  # 重置
             fill_polys = []
-
-            # 新增：存储穿越次数矩阵的数据结构
-            crossing_matrix_data = {}
-            region_gathering_points = []
-
             if arterial_lines:
                 merged = linemerge(arterial_lines)
                 merged = snap(merged, merged, tolerance=1e-6)
@@ -789,15 +788,6 @@ class RoadNetworkSelector:
                     # 修改：存储到类属性中以便Dijkstra算法使用
                     self.region_centroid_nodes.append((closest_node_id, closest_node_geom))
 
-                    # 收集该区域内的集合点
-                    g_points = []
-                    for p_node in getattr(self, 'gathering_points', []):
-                        if p_node in nodes.index:
-                            p_geom = nodes.loc[p_node].geometry
-                            if poly.contains(p_geom):
-                                g_points.append((p_node, p_geom))
-                    region_gathering_points.append(g_points)
-
                     # 绘制小区内所有原始节点（小尺寸）
                     nodes_in_poly = original_nodes[original_nodes.geometry.apply(lambda g: poly.contains(g))]
                     if len(nodes_in_poly) > 0:
@@ -812,6 +802,7 @@ class RoadNetworkSelector:
                     ax.scatter(centroid.x, centroid.y, marker='o', s=50, color="gray", alpha=0.5)
                     ax.scatter(closest_node_geom.x, closest_node_geom.y, marker='^', s=150, color="orange",
                                edgecolor="black", label="Needs point" if idx == 0 else "")
+
                     # Draw a line connecting the geometric centroid to the closest node
                     ax.plot([centroid.x, closest_node_geom.x], [centroid.y, closest_node_geom.y],
                             'k:', linewidth=0.8, alpha=0.6)
@@ -826,66 +817,64 @@ class RoadNetworkSelector:
                                 mid_x = (closest_node_geom.x + p_geom.x) / 2
                                 mid_y = (closest_node_geom.y + p_geom.y) / 2
                                 ax.text(mid_x, mid_y, '0', fontsize=10, color='blue')
+            if len(fill_polys) > 1 and len(self.arterial_edges) > 0:
+                poly_edge_map = []
+                for poly in fill_polys:
+                    coords = list(poly.exterior.coords)
+                    segments = []
+                    for i in range(len(coords) - 1):
+                        seg = LineString([coords[i], coords[i + 1]])
+                        segments.append(seg)
+                    poly_edge_map.append(segments)
+                arterial_match = {}
+                for (u, v, k) in self.arterial_edges:
+                    if (u, v, k) in edges.index:
+                        edge_geom = edges.loc[(u, v, k)].geometry
+                        if edge_geom.geom_type == 'MultiLineString':
+                            lines = list(edge_geom.geoms)
+                        else:
+                            lines = [edge_geom]
+                        for line in lines:
+                            for idx, segments in enumerate(poly_edge_map):
+                                for seg in segments:
+                                    if seg.intersection(line).length > 1.0:
+                                        arterial_match.setdefault((u, v, k), set()).add(idx)
+                adjacent_pairs = set()
+                for match_idxs in arterial_match.values():
+                    if len(match_idxs) == 2:
+                        i, j = sorted(match_idxs)
+                        adjacent_pairs.add((i, j))
+                region_gathering_points = []
+                for poly in fill_polys:
+                    g_points = []
+                    for p_node in getattr(self, 'gathering_points', []):
+                        if p_node in nodes.index:
+                            p_geom = nodes.loc[p_node].geometry
+                            if poly.contains(p_geom):
+                                g_points.append((p_node, p_geom))
+                    region_gathering_points.append(g_points)
+                for i, j in adjacent_pairs:
+                    # Use closest nodes to centroids instead of geometric centroids
+                    node_i, geom_i = self.region_centroid_nodes[i]
+                    node_j, geom_j = self.region_centroid_nodes[j]
 
-                # 计算区域间穿越次数（原有逻辑）
-                if len(fill_polys) > 1 and len(self.arterial_edges) > 0:
-                    poly_edge_map = []
-                    for poly in fill_polys:
-                        coords = list(poly.exterior.coords)
-                        segments = []
-                        for i in range(len(coords) - 1):
-                            seg = LineString([coords[i], coords[i + 1]])
-                            segments.append(seg)
-                        poly_edge_map.append(segments)
-                    arterial_match = {}
-                    for (u, v, k) in self.arterial_edges:
-                        if (u, v, k) in edges.index:
-                            edge_geom = edges.loc[(u, v, k)].geometry
-                            if edge_geom.geom_type == 'MultiLineString':
-                                lines = list(edge_geom.geoms)
-                            else:
-                                lines = [edge_geom]
-                            for line in lines:
-                                for idx, segments in enumerate(poly_edge_map):
-                                    for seg in segments:
-                                        if seg.intersection(line).length > 1.0:
-                                            arterial_match.setdefault((u, v, k), set()).add(idx)
-                    adjacent_pairs = set()
-                    for match_idxs in arterial_match.values():
-                        if len(match_idxs) == 2:
-                            i, j = sorted(match_idxs)
-                            adjacent_pairs.add((i, j))
-
-                    # 计算区域间穿越次数（原有逻辑）
-                    for i, j in adjacent_pairs:
-                        # Use closest nodes to centroids instead of geometric centroids
-                        node_i, geom_i = self.region_centroid_nodes[i]
-                        node_j, geom_j = self.region_centroid_nodes[j]
-
-                        points_i = [geom_i] + [geom for _, geom in region_gathering_points[i]]
-                        points_j = [geom_j] + [geom for _, geom in region_gathering_points[j]]
-                        min_dist = float('inf')
-                        best_pair = None
-                        for pt1 in points_i:
-                            for pt2 in points_j:
-                                d = pt1.distance(pt2)
-                                if d < min_dist:
-                                    min_dist = d
-                                    best_pair = (pt1, pt2)
-                        if best_pair:
-                            line_between = LineString([best_pair[0], best_pair[1]])
-                            crossings = count_crossings(line_between, arterial_lines)
-                            ax.plot([best_pair[0].x, best_pair[1].x], [best_pair[0].y, best_pair[1].y],
-                                    'k-', linewidth=2)
-                            mx, my = (best_pair[0].x + best_pair[1].x) / 2, (best_pair[0].y + best_pair[1].y) / 2
-                            ax.text(mx, my, str(crossings), fontsize=12, color='purple', weight='bold')
-
-                            # 存储区域间穿越次数
-                            crossing_matrix_data[(i, j)] = crossings
-                            crossing_matrix_data[(j, i)] = crossings  # 对称矩阵
-
-            # 生成并显示穿越次数矩阵
-            self.generate_crossing_matrix(crossing_matrix_data, region_gathering_points)
+                    points_i = [geom_i] + [geom for _, geom in region_gathering_points[i]]
+                    points_j = [geom_j] + [geom for _, geom in region_gathering_points[j]]
+                    min_dist = float('inf')
+                    best_pair = None
+                    for pt1 in points_i:
+                        for pt2 in points_j:
+                            d = pt1.distance(pt2)
+                            if d < min_dist:
+                                min_dist = d
+                                best_pair = (pt1, pt2)
+                    if best_pair:
+                        line_between = LineString([best_pair[0], best_pair[1]])
+                        crossings = count_crossings(line_between, arterial_lines)
+                        ax.plot([best_pair[0].x, best_pair[1].x], [best_pair[0].y, best_pair[1].y],
+                                'k-', linewidth=2)
+                        mx, my = (best_pair[0].x + best_pair[1].x) / 2, (best_pair[0].y + best_pair[1].y) / 2
+                        ax.text(mx, my, str(crossings), fontsize=12, color='purple', weight='bold')
 
             if len(edges) > 0:
                 edge_colors = []
@@ -985,6 +974,7 @@ class RoadNetworkSelector:
             print(f"Error happens when getting the map: {e}")
             import traceback
             traceback.print_exc()
+
     def reset_selection(self, event):
         self.save_history()
         self.selected_nodes = set()
@@ -1016,96 +1006,7 @@ class RoadNetworkSelector:
         ))
         if len(self._history) > 100:
             self._history = self._history[-100:]
-    def generate_crossing_matrix(self, crossing_data, region_gathering_points):
-        """生成并显示穿越次数矩阵"""
-        print("\n" + "=" * 60)
-        print("需求点到集合点的干路穿越次数矩阵")
-        print("=" * 60)
 
-        # 收集所有需求点和集合点
-        demand_points = []
-        gathering_points_info = []
-
-        # 需求点信息
-        for i, (node_id, geom) in enumerate(self.region_centroid_nodes):
-            demand_points.append(f"NP{i + 1}(Node{node_id})")
-
-        # 集合点信息
-        for gp in self.gathering_points:
-            capacity = self.gathering_point_capacities.get(gp, "?")
-            gathering_points_info.append(f"GP{gp}(Cap:{capacity})")
-        if not gathering_points_info:
-            print("没有集合点，无法生成矩阵")
-            return
-
-        # 创建穿越次数矩阵
-        crossing_matrix = pd.DataFrame(
-            index=demand_points,
-            columns=gathering_points_info,
-        )
-        crossing_matrix[:] = None  # 初始化为-1表示未计算
-
-        # 填充矩阵数据
-        for demand_idx, (demand_node_id, demand_geom) in enumerate(self.region_centroid_nodes):
-            for gp_idx, gp in enumerate(self.gathering_points):
-                # 判断需求点和集合点是否在同一区域
-                demand_region = self.find_point_region(demand_geom)
-                gp_region = self.find_point_region(self.nodes.loc[gp].geometry)
-
-                if demand_region == gp_region and demand_region != -1:
-                    # 同一区域内，穿越次数为0
-                    crossing_matrix.iloc[demand_idx, gp_idx] = 0
-                elif demand_region != -1 and gp_region != -1:
-                    # 不同区域，查找已计算的穿越次数
-                    key = tuple(sorted([demand_region, gp_region]))
-                    if key in crossing_data:
-                        crossing_matrix.iloc[demand_idx, gp_idx] = crossing_data[key]
-                    elif (demand_region, gp_region) in crossing_data:
-                        crossing_matrix.iloc[demand_idx, gp_idx] = crossing_data[(demand_region, gp_region)]
-                    elif (gp_region, demand_region) in crossing_data:
-                        crossing_matrix.iloc[demand_idx, gp_idx] = crossing_data[(gp_region, demand_region)]
-                    else:
-                        crossing_matrix.iloc[demand_idx, gp_idx] = None  # 未知，标记为999
-                else:
-                    crossing_matrix.iloc[demand_idx, gp_idx] = None  # 无法确定区域
-
-        # 显示矩阵
-        print(crossing_matrix.to_string())
-
-        # 存储到类属性以供后续使用
-        self.arterial_crossing_matrix = crossing_matrix
-        return crossing_matrix
-    def find_point_region(self, point_geom):
-        """找到点所属的区域索引"""
-        if not hasattr(self, '_cached_regions'):
-            # 缓存区域多边形
-            self._cached_regions = []
-            if self.arterial_edges:
-                arterial_lines = []
-                for (u, v, k) in self.arterial_edges:
-                    if (u, v, k) in self.edges.index:
-                        edge_geom = self.edges.loc[(u, v, k)].geometry
-                        if edge_geom.geom_type == 'MultiLineString':
-                            arterial_lines.extend(list(edge_geom.geoms))
-                        else:
-                            arterial_lines.append(edge_geom)
-
-                if arterial_lines:
-                    merged = linemerge(arterial_lines)
-                    merged = snap(merged, merged, tolerance=1e-6)
-                    if hasattr(merged, '__iter__'):
-                        lines_for_poly = list(merged)
-                    else:
-                        lines_for_poly = [merged]
-                    polygons = list(polygonize(lines_for_poly))
-                    for poly in polygons:
-                        if poly.area > 10:
-                            self._cached_regions.append(poly)
-        # 查找点所属区域
-        for idx, region in enumerate(self._cached_regions):
-            if region.contains(point_geom):
-                return idx
-        return -1  # 不属于任何区域
     def undo_action(self, event):
         if not self._history:
             print("没有可撤销的操作")
