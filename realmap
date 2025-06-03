@@ -578,13 +578,13 @@ class RoadNetworkSelector:
             x_labels = []
             for gp in self.distance_matrix.columns:
                 capacity = self.gathering_point_capacities.get(gp, "?")
-                x_labels.append(f"GP{gp}\nVCapacity:{capacity}")
+                x_labels.append(f"GP{gp}")
             ax1.set_xticklabels(x_labels, rotation=45, ha='right')
 
             # Y轴标签：需求点
             y_labels = []
             for i, centroid_id in enumerate(self.distance_matrix.index):
-                y_labels.append(f"NP{i + 1}\nNode{centroid_id}")
+                y_labels.append(f"NP{i + 1}")
             ax1.set_yticklabels(y_labels)
 
             # 在每个格子中标注距离值
@@ -620,7 +620,7 @@ class RoadNetworkSelector:
                             marker='^', s=200, color=color,
                             edgecolor='black', linewidth=2,
                             label=f'NP{i + 1}')
-                ax2.text(centroid_geom.x + 50, centroid_geom.y + 50, f'需求点{i + 1}',
+                ax2.text(centroid_geom.x + 50, centroid_geom.y + 50, f'NP{i + 1}',
                          fontsize=10, color=color, weight='bold')
 
             # 绘制集合点
@@ -724,7 +724,6 @@ class RoadNetworkSelector:
             distances = nodes_in_polygon.geometry.distance(point)
             closest_node_idx = distances.idxmin()
             return closest_node_idx, nodes_in_polygon.loc[closest_node_idx].geometry
-
         try:
             fig, ax = plt.subplots(figsize=(10, 8))
             # 获取选择的图形的节点和边
